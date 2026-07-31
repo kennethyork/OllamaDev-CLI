@@ -20,8 +20,6 @@
 #include <QJsonDocument>
 #include <QProcess>
 
-#include "../ade/GitGraph.h"
-#include "../ade/VtParser.h"
 #include "Backend.h"
 #include "GitFlow.h"
 #include "Config.h"
@@ -1012,48 +1010,6 @@ static void testLsp() {
           "with an error message");
 }
 
-// The commit graph. Lane assignment is the part of a git GUI that is either right
-// or obviously, embarrassingly wrong, so it is tested against a hand-built history
-// with a branch and a merge in it — the only shape that actually exercises lanes.
-static void testGitGraph() {
-    //   e (merge of c and d)
-    //   |\
-    //   c d
-    //   |/
-    //   b
-    //   |
-    //   a
-    const QString log = QStringLiteral(
-        "e|c d|kenny|2026-07-14|HEAD -> main|merge the branch\n"
-        "d|b|kenny|2026-07-14|feature|the feature\n"
-        "c|b|kenny|2026-07-14||more work on main\n"
-        "b|a|kenny|2026-07-14||second\n"
-        "a||kenny|2026-07-14||first\n");
-
-    QVector<GraphCommit> commits = GitGraph::parse(log);
-    check(commits.size() == 5, "the graph parses every commit");
-    check(commits.first().parents.size() == 2, "a merge commit has two parents");
-    check(commits.first().isHead, "HEAD is marked");
-    check(commits.at(1).refs.contains(QStringLiteral("feature")), "a branch ref is attached");
-    check(commits.at(4).parents.isEmpty(), "the root commit has no parent");
-    check(commits.first().subject == QStringLiteral("merge the branch"),
-          "the subject survives (it is the last field, so a '|' in it is safe)");
-
-    const int widest = GitGraph::layout(commits);
-    check(widest >= 2, "the branch opens a second lane");
-    check(commits.first().lane == 0, "the merge sits in the lane it was already in");
-
-    // The two sides of the merge must NOT share a lane, or the graph draws them as
-    // one line and the branch is invisible — which is the whole point of the graph.
-    check(commits.at(1).lane != commits.at(2).lane,
-          "the two sides of a merge are drawn in DIFFERENT lanes");
-
-    // …and they must come back together: `b` is the parent of both, so by the time
-    // it is drawn only one lane is left alive.
-    check(commits.at(3).lanesWide == 1, "the lanes collapse again once the branch rejoins");
-    check(commits.at(4).lanesWide == 1, "…and stay collapsed down to the root");
-}
-
 // Interactive rebase, driven headlessly. Rewriting history is the most dangerous
 // thing this app does, so the guards are tested as hard as the happy path.
 static void testRebase() {
@@ -1313,123 +1269,6 @@ static void testGitModel() {
     qputenv("HOME", realHome);
 }
 
-// ---- terminal emulator (VtParser) ------------------------------------------
-// The byte-in / styled-grid-out core that TerminalWidget paints. It has no widget
-// or GUI dependency, so it compiles straight into this headless binary — and it is
-// exactly the part that broke most this week (reflow, scrollback, box-drawing), so
-// it now has behavioural tests instead of only being exercised by hand.
-
-static QString vtLine(const VtParser& vt, int y) {
-    return vt.textAt(0, y, vt.cols() - 1, y);  // trailing blanks trimmed
-}
-static char32_t vtCell(const VtParser& vt, int x, int y) {
-    const QVector<Cell>& s = vt.screen();
-    const int i = y * vt.cols() + x;
-    return (i >= 0 && i < s.size()) ? s[i].ch : U'\0';
-}
-
-static void testVtParser() {
-    // Plain text lands on the grid and the cursor advances past it.
-    {
-        VtParser vt;
-        vt.resize(20, 5);
-        vt.feed("hello");
-        check(vtLine(vt, 0) == QStringLiteral("hello"), "vt: plain text lands on row 0");
-        check(vt.cursorX() == 5 && vt.cursorY() == 0, "vt: cursor advances with output");
-    }
-    // CR/LF break output into rows.
-    {
-        VtParser vt;
-        vt.resize(20, 5);
-        vt.feed("a\r\nbb\r\nccc");
-        check(vtLine(vt, 0) == QStringLiteral("a") && vtLine(vt, 1) == QStringLiteral("bb") &&
-                  vtLine(vt, 2) == QStringLiteral("ccc"),
-              "vt: CR/LF split output across rows");
-    }
-    // CSI cursor address is 1-based (ESC[row;colH).
-    {
-        VtParser vt;
-        vt.resize(20, 5);
-        vt.feed("\x1b[3;5HX");
-        check(vtCell(vt, 4, 2) == U'X', "vt: CSI H addresses the cursor (1-based)");
-    }
-    // SGR bold sets the attribute, and SGR 0 resets it.
-    {
-        VtParser vt;
-        vt.resize(20, 5);
-        vt.feed("\x1b[1mB\x1b[0mn");
-        check((vt.screen()[0].attrs & AttrBold) && !(vt.screen()[1].attrs & AttrBold),
-              "vt: SGR bold sets then SGR 0 resets");
-    }
-    // CSI 2J clears the screen.
-    {
-        VtParser vt;
-        vt.resize(20, 5);
-        vt.feed("junk\x1b[2J");
-        check(vtLine(vt, 0).isEmpty(), "vt: CSI 2J clears the screen");
-    }
-    // More lines than the screen holds spill into scrollback, and dumpText carries
-    // both scrollback and the live screen.
-    {
-        VtParser vt;
-        vt.resize(10, 3);
-        for (int i = 0; i < 6; ++i) vt.feed(QByteArray("line") + QByteArray::number(i) + "\r\n");
-        check(vt.scrollback().size() >= 3, "vt: rows scrolled off the top land in scrollback");
-        const QString all = vt.dumpText();
-        check(all.contains(QStringLiteral("line0")) && all.contains(QStringLiteral("line5")),
-              "vt: dumpText carries scrollback + screen");
-    }
-    // The reflow regression: shrinking then growing must not lose visible content.
-    {
-        VtParser vt;
-        vt.resize(40, 6);
-        vt.feed("keep-me");
-        vt.resize(20, 4);
-        vt.resize(60, 10);
-        check(vt.dumpText().contains(QStringLiteral("keep-me")),
-              "vt: content survives a shrink-then-grow resize");
-    }
-    // The alt screen (DECSET 1049) is where TUIs live; it must never feed scrollback.
-    {
-        VtParser vt;
-        vt.resize(20, 4);
-        vt.feed("primary\r\n");
-        const int sbBefore = vt.scrollback().size();
-        vt.feed("\x1b[?1049h");
-        check(vt.altScreen(), "vt: DECSET 1049 enters the alt screen");
-        vt.feed("tui\r\nrows\r\nhere\r\nnow");
-        check(vt.scrollback().size() == sbBefore, "vt: the alt screen never feeds scrollback");
-        vt.feed("\x1b[?1049l");
-        check(!vt.altScreen(), "vt: DECRST 1049 leaves the alt screen");
-    }
-    // Box-drawing codepoints pass through untouched — the widget custom-draws them,
-    // so the parser must hand them over intact (┌─┐ = U+250C/2500/2510).
-    {
-        VtParser vt;
-        vt.resize(10, 3);
-        vt.feed(QByteArray::fromHex("E2948CE29480E29490"));
-        check(vtCell(vt, 0, 0) == 0x250C && vtCell(vt, 1, 0) == 0x2500 &&
-                  vtCell(vt, 2, 0) == 0x2510,
-              "vt: box-drawing codepoints pass through intact");
-    }
-    // A codepoint split across two feed() calls (the PTY WILL do this) decodes whole
-    // (é = U+00E9, UTF-8 C3 A9).
-    {
-        VtParser vt;
-        vt.resize(10, 3);
-        vt.feed(QByteArray::fromHex("C3"));
-        vt.feed(QByteArray::fromHex("A9"));
-        check(vtCell(vt, 0, 0) == 0x00E9, "vt: a codepoint split across chunks decodes whole");
-    }
-    // An astral codepoint (this app's own CLI prints U+1F4AD 💭) survives as ONE cell.
-    {
-        VtParser vt;
-        vt.resize(10, 3);
-        vt.feed(QByteArray::fromHex("F09F92AD"));
-        check(vtCell(vt, 0, 0) == 0x1F4AD, "vt: an astral codepoint survives as one cell");
-    }
-}
-
 // ---- session auto-resume (Session::latestForCwd) ---------------------------
 // The `-c` / folder auto-resume path. testExportImport already covers save/load
 // fidelity; this pins the resume-SELECTION rules that were reworked this week.
@@ -1501,11 +1340,9 @@ int main(int argc, char** argv) {
     s << "update\n";     s.flush(); testUpdateSafety();
     s << "acp\n";        s.flush(); testAcp();
     s << "lsp\n";        s.flush(); testLsp();
-    s << "git-graph\n";  s.flush(); testGitGraph();
     s << "rebase\n";     s.flush(); testRebase();
     s << "worktree\n";   s.flush(); testWorktreeSandbox();
     s << "git-model\n";  s.flush(); testGitModel();
-    s << "vtparser\n";   s.flush(); testVtParser();
     s << "session-resume\n"; s.flush(); testSessionResume();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";

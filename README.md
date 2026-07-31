@@ -18,7 +18,7 @@ Needs a C++20 compiler, CMake ≥ 3.21, and Qt6 (Core/Network/Concurrent).
 # or, manually:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
-./build/tests/odv-tests   # 226 assertions
+./build/tests/odv-tests   # 200 assertions
 ./build/cli/ollamadev --version
 ```
 
@@ -58,8 +58,7 @@ Run `ollamadev --help` for the full command surface.
 ```
 core/    the engine — agent loop, tools, crew, backends, git, MCP, LSP, …
 cli/     the CLI + REPL (main.cpp, Repl.cpp)
-tests/   226-assertion smoke suite (odv-tests)
-ade/     two GUI-free helpers (GitGraph, VtParser) the test binary compiles in
+tests/   smoke suite (odv-tests)
 ```
 
 ## License

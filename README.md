@@ -9,6 +9,10 @@ This is the standalone CLI, extracted from the OllamaDev ADE desktop app. It sha
 the same `core/` engine (agent loop, tools, crew, git workflow, MCP, LSP) but builds
 with **no GUI toolchain** — only Qt Core, Network, and Concurrent.
 
+**Docs / site:** a self-contained landing + command reference lives in
+[`docs/index.html`](docs/index.html). To publish it, enable GitHub Pages on this repo
+with the source set to the `main` branch `/docs` folder.
+
 ## Build
 
 Needs a C++20 compiler, CMake ≥ 3.21, and Qt6 (Core/Network/Concurrent).

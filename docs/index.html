@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OllamaDev CLI — a local-first AI coding agent for your terminal</title>
+<meta name="description" content="Local-first AI coding agent. Runs on Ollama, drives every major coding CLI behind one interface, and ships a parallel crew — research → plan → code → audit → land.">
+<style>
+  :root{
+    --bg:#f7f7f5; --panel:#ffffff; --ink:#1a1a19; --muted:#5f5f5a;
+    --line:#e5e4df; --accent:#0b7d5b; --accent-ink:#0b7d5b;
+    --code-bg:#f2f1ec; --code-ink:#1a1a19; --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);
+    --radius:14px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#131413; --panel:#1c1d1b; --ink:#ececea; --muted:#9d9d97;
+      --line:#2c2e2b; --accent:#3ddc97; --accent-ink:#3ddc97;
+      --code-bg:#101110; --code-ink:#e6e6e3; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f7f7f5; --panel:#ffffff; --ink:#1a1a19; --muted:#5f5f5a; --line:#e5e4df;
+    --accent:#0b7d5b; --accent-ink:#0b7d5b; --code-bg:#f2f1ec; --code-ink:#1a1a19;
+  }
+  :root[data-theme="dark"]{
+    --bg:#131413; --panel:#1c1d1b; --ink:#ececea; --muted:#9d9d97; --line:#2c2e2b;
+    --accent:#3ddc97; --accent-ink:#3ddc97; --code-bg:#101110; --code-ink:#e6e6e3;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent-ink);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,pre,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+  .wrap{max-width:960px;margin:0 auto;padding:0 22px}
+
+  header.nav{position:sticky;top:0;z-index:10;backdrop-filter:blur(10px);
+    background:color-mix(in srgb,var(--bg) 82%,transparent);border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;gap:18px;height:58px}
+  .brand{font-weight:700;letter-spacing:-.02em;display:flex;align-items:center;gap:9px}
+  .brand .dot{width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 22%,transparent)}
+  .nav nav{margin-left:auto;display:flex;gap:20px;font-size:14.5px}
+  .nav nav a{color:var(--muted)}
+  .nav nav a:hover{color:var(--ink);text-decoration:none}
+  @media (max-width:640px){.nav nav a.hideable{display:none}}
+
+  .hero{padding:76px 0 46px}
+  .eyebrow{display:inline-block;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 12%,transparent);
+    padding:5px 11px;border-radius:999px;margin-bottom:20px}
+  h1{font-size:clamp(34px,6vw,54px);line-height:1.05;letter-spacing:-.03em;margin:0 0 18px;font-weight:800}
+  h1 .grad{color:var(--accent-ink)}
+  .lede{font-size:clamp(17px,2.3vw,20px);color:var(--muted);max-width:660px;margin:0 0 30px}
+  .cta{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:11px;font-weight:600;font-size:15px;border:1px solid transparent}
+  .btn.primary{background:var(--accent);color:#04120c}
+  .btn.primary:hover{text-decoration:none;filter:brightness(1.06)}
+  .btn.ghost{border-color:var(--line);color:var(--ink);background:var(--panel)}
+  .btn.ghost:hover{text-decoration:none;border-color:var(--accent)}
+
+  .termcard{margin-top:40px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);overflow:hidden}
+  .termbar{display:flex;align-items:center;gap:7px;padding:11px 14px;border-bottom:1px solid var(--line)}
+  .termbar i{width:11px;height:11px;border-radius:50%;background:var(--line);display:inline-block}
+  .termbar span{margin-left:8px;font-size:12.5px;color:var(--muted)}
+  pre{margin:0;padding:18px 18px 20px;overflow-x:auto;background:var(--code-bg);color:var(--code-ink);font-size:13.5px;line-height:1.75}
+  pre .c{color:var(--muted)}
+  pre .p{color:var(--accent-ink)}
+
+  section{padding:52px 0;border-top:1px solid var(--line)}
+  h2{font-size:clamp(24px,3.4vw,32px);letter-spacing:-.02em;margin:0 0 8px;font-weight:750}
+  .sub{color:var(--muted);margin:0 0 30px;max-width:640px}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 7px;font-size:16.5px;letter-spacing:-.01em}
+  .card p{margin:0;color:var(--muted);font-size:14.5px}
+  .card .ic{font-size:20px;margin-bottom:12px;display:block}
+
+  .steps{display:grid;gap:14px;counter-reset:s}
+  .step{display:flex;gap:16px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .step .n{counter-increment:s;flex:0 0 auto;width:30px;height:30px;border-radius:50%;
+    background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent-ink);
+    display:grid;place-items:center;font-weight:700;font-size:14px}
+  .step .n::before{content:counter(s)}
+  .step b{display:block;margin-bottom:2px}
+  .step p{margin:0;color:var(--muted);font-size:14.5px}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px;font-size:14px}
+  .flow .node{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:6px 11px;font-family:ui-monospace,monospace;font-size:13px}
+  .flow .arr{color:var(--muted)}
+
+  table{width:100%;border-collapse:collapse;font-size:14.5px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .tablewrap{overflow-x:auto}
+  th,td{text-align:left;padding:13px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600}
+  tr:last-child td{border-bottom:none}
+  td code{background:var(--code-bg);padding:2px 6px;border-radius:6px;font-size:13px;white-space:nowrap}
+  .yes{color:var(--accent-ink);font-weight:600}
+  .no{color:var(--muted)}
+
+  .cmdgroup{margin-bottom:26px}
+  .cmdgroup h3{font-size:15px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:0 0 10px;font-weight:600}
+  .cmd{display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:14px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .cmd:last-child{border-bottom:none}
+  .cmd code{background:var(--code-bg);padding:3px 8px;border-radius:6px;font-size:13px;align-self:start;color:var(--code-ink)}
+  .cmd span{color:var(--muted);font-size:14.5px}
+  @media (max-width:560px){.cmd{grid-template-columns:1fr;gap:4px}}
+
+  .note{background:color-mix(in srgb,var(--accent) 8%,transparent);border:1px solid color-mix(in srgb,var(--accent) 25%,transparent);
+    border-radius:12px;padding:16px 18px;color:var(--ink);font-size:14.5px}
+  footer{border-top:1px solid var(--line);padding:34px 0 60px;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:center}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span> OllamaDev&nbsp;CLI</div>
+    <nav>
+      <a href="#features" class="hideable">Features</a>
+      <a href="#crew" class="hideable">Crew</a>
+      <a href="#fit">Where it fits</a>
+      <a href="#commands">Commands</a>
+      <a href="https://github.com/kennethyork/OllamaDev-CLI">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+  <section class="hero" style="border:none">
+    <span class="eyebrow">Local-first · Backend-agnostic · AGPL</span>
+    <h1>A coding agent that runs <span class="grad">on your machine</span>,<br>and drives every CLI you already have.</h1>
+    <p class="lede">
+      OllamaDev CLI is a terminal-native AI coding agent. It talks to <b>Ollama</b> by default —
+      so your code never leaves your machine — and puts <b>12 backends behind one interface</b>,
+      including Claude, Codex, Gemini and Cursor. Then it adds a parallel <b>crew</b>:
+      research → plan → code → audit → land.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#install">Get started →</a>
+      <a class="btn ghost" href="https://github.com/kennethyork/OllamaDev-CLI">View on GitHub</a>
+    </div>
+
+    <div class="termcard">
+      <div class="termbar"><i></i><i></i><i></i><span>~/project — ollamadev</span></div>
+<pre><span class="c"># chat with an agent about the folder you're in (auto-resumes)</span>
+<span class="p">$</span> ollamadev
+
+<span class="c"># one-shot: describe a change, it edits the files</span>
+<span class="p">$</span> ollamadev <span class="c">"add a --json flag to the export command"</span>
+
+<span class="c"># the crew: a director plans, N coders build in parallel git</span>
+<span class="c"># worktrees, an auditor reviews, the winner lands</span>
+<span class="p">$</span> ollamadev crew <span class="c">"migrate the config layer to TOML"</span>
+
+<span class="c"># commit with an AI message — a leaked secret BLOCKS the commit</span>
+<span class="p">$</span> ollamadev ship</pre>
+    </div>
+  </section>
+</div>
+
+<div class="wrap">
+  <section id="features">
+    <h2>What it does</h2>
+    <p class="sub">A full coding-agent toolkit — not a wrapper. Everything runs locally unless you choose a cloud model.</p>
+    <div class="grid">
+      <div class="card"><span class="ic">🔒</span><h3>Local-first &amp; private</h3><p>Runs against Ollama on your own hardware. Offline-capable, no per-token bill, nothing leaves the machine unless you point it at a cloud model yourself.</p></div>
+      <div class="card"><span class="ic">🔌</span><h3>Every backend, one interface</h3><p>ollama · claude · codex · gemini · cursor-agent · opencode · qwen · aider · goose · amp · crush · droid. Mix providers inside a single run.</p></div>
+      <div class="card"><span class="ic">👥</span><h3>The crew</h3><p>Parallel multi-agent: research → plan → N coders in isolated git worktrees → audit → land. Opt-in brains for routing, debate and amplification.</p></div>
+      <div class="card"><span class="ic">🚢</span><h3>Ship-it git workflow</h3><p><code>diff</code>, <code>commit</code>, <code>ship</code>, <code>pr</code>. AI commit messages, and a secret scanner that <b>blocks</b> a commit carrying a leaked credential.</p></div>
+      <div class="card"><span class="ic">🧠</span><h3>Context that sticks</h3><p>Semantic code index, meaning-based code search, wiki-linked memory, and progressive-disclosure skills.</p></div>
+      <div class="card"><span class="ic">🛠️</span><h3>Integrations</h3><p><code>mcp serve</code> exposes its tools to any MCP client. A built-in LSP gives completion, hover, go-to-def and real diagnostics.</p></div>
+      <div class="card"><span class="ic">🔁</span><h3>Always-on</h3><p><code>watch</code> re-runs a task on file changes; named long-lived terminals outlive the command and are shared with the desktop app.</p></div>
+      <div class="card"><span class="ic">📊</span><h3>Measurable</h3><p><code>eval</code> runs a fixed task suite into a pass-rate you can compare across models — with an exit code you can gate CI on.</p></div>
+    </div>
+  </section>
+
+  <section id="crew">
+    <h2>The crew</h2>
+    <p class="sub">One task, a whole bench. Each coder works in its own git worktree, so parallel work never collides — and nothing lands until it's reviewed.</p>
+    <div class="flow">
+      <span class="node">research</span><span class="arr">→</span>
+      <span class="node">plan</span><span class="arr">→</span>
+      <span class="node">coder 1</span><span class="node">coder 2</span><span class="node">coder N</span><span class="arr">→</span>
+      <span class="node">audit</span><span class="arr">→</span>
+      <span class="node">land</span>
+    </div>
+    <div class="grid" style="margin-top:26px">
+      <div class="card"><h3><code>--route</code></h3><p>Auto-pick each role's model by task difficulty.</p></div>
+      <div class="card"><h3><code>--debate</code></h3><p>Advocate / skeptic / judge vote on each changeset.</p></div>
+      <div class="card"><h3><code>--amplify N</code></h3><p>N director plans (keep the modal one) + an N-reviewer audit panel; majority rules.</p></div>
+      <div class="card"><h3><code>--dedupe</code></h3><p>Hold coders whose work duplicates another's.</p></div>
+      <div class="card"><h3><code>--security</code></h3><p>A read-only vulnerability scan into a report.</p></div>
+      <div class="card"><h3><code>--review</code></h3><p>Hold everything for review instead of auto-applying — accept or discard from the board.</p></div>
+    </div>
+    <p class="sub" style="margin-top:22px">Plain <code>crew</code> is unchanged — every brain above is opt-in.</p>
+  </section>
+
+  <section id="fit">
+    <h2>Where it fits</h2>
+    <p class="sub">OllamaDev isn't trying to out-reason a frontier model. It's the local-first layer that unifies your tools — including the cloud CLIs — behind one workflow.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>&nbsp;</th><th>OllamaDev CLI</th><th>A single cloud coding CLI</th></tr></thead>
+        <tbody>
+          <tr><td>Runs fully local / offline</td><td class="yes">Yes — via Ollama</td><td class="no">No</td></tr>
+          <tr><td>Cost model</td><td class="yes">Free on local models</td><td class="no">Per-token</td></tr>
+          <tr><td>Backends</td><td class="yes">12, mixable in one run</td><td class="no">One</td></tr>
+          <tr><td>Drives other coding CLIs</td><td class="yes">Yes — incl. Claude, Codex, Gemini</td><td class="no">No</td></tr>
+          <tr><td>Parallel crew in git worktrees</td><td class="yes">Built in</td><td class="no">Varies</td></tr>
+          <tr><td>Raw model capability</td><td class="no">Depends on the model you point it at</td><td class="yes">Frontier</td></tr>
+          <tr><td>Self-hostable &amp; open source</td><td class="yes">AGPL-3.0</td><td class="no">Proprietary</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin-top:18px">Want frontier quality on a specific task? Point a role at a cloud backend — OllamaDev orchestrates it the same way it does a local model.</p>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p class="sub">Needs a C++20 compiler, CMake ≥ 3.21 and Qt6 (Core / Network / Concurrent). No GUI toolchain required.</p>
+    <div class="termcard">
+      <div class="termbar"><i></i><i></i><i></i><span>build from source</span></div>
+<pre><span class="p">$</span> git clone https://github.com/kennethyork/OllamaDev-CLI.git
+<span class="p">$</span> cd OllamaDev-CLI
+<span class="p">$</span> ./install.sh            <span class="c"># build → test → install to ~/.local/bin</span>
+
+<span class="c"># or manually</span>
+<span class="p">$</span> cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+<span class="p">$</span> cmake --build build -j"$(nproc)"
+<span class="p">$</span> ./build/cli/ollamadev --version
+
+<span class="c"># package it (.deb / .rpm / .tar.gz)</span>
+<span class="p">$</span> cd build &amp;&amp; cpack</pre>
+    </div>
+    <div class="steps" style="margin-top:26px">
+      <div class="step"><span class="n"></span><div><b>Point it at a model</b><p><code>ollamadev setup</code> — detects your hardware, recommends and pulls a model.</p></div></div>
+      <div class="step"><span class="n"></span><div><b>Check the wiring</b><p><code>ollamadev doctor</code> — health check · <code>ollamadev backends</code> — which providers are installed.</p></div></div>
+      <div class="step"><span class="n"></span><div><b>Start working</b><p><code>ollamadev</code> for interactive chat, or <code>ollamadev "your task"</code> for a one-shot turn.</p></div></div>
+    </div>
+  </section>
+
+  <section id="commands">
+    <h2>Command reference</h2>
+    <p class="sub">The full surface. Run <code>ollamadev --help</code> for options on any command.</p>
+
+    <div class="cmdgroup">
+      <h3>Core</h3>
+      <div class="cmd"><code>ollamadev</code><span>Interactive chat, auto-resumes this folder (<code>--new</code> for fresh).</span></div>
+      <div class="cmd"><code>ollamadev "&lt;prompt&gt;"</code><span>One-shot agent turn.</span></div>
+      <div class="cmd"><code>backends</code><span>Which providers are installed and how wide they run.</span></div>
+      <div class="cmd"><code>models [presets|cloud|chain]</code><span>List models on the active backend · curated catalog + fallback chain.</span></div>
+      <div class="cmd"><code>agents [show &lt;n&gt;]</code><span>File-defined subagent personas from <code>.ollamadev/agents/*.md</code>.</span></div>
+      <div class="cmd"><code>doctor</code><span>Health check.</span></div>
+      <div class="cmd"><code>setup</code><span>Detect hardware, recommend + pull a model.</span></div>
+      <div class="cmd"><code>pull &lt;model&gt;</code><span>Download a model (resumable).</span></div>
+      <div class="cmd"><code>context</code><span>Suggest <code>num_ctx</code> from free RAM/VRAM.</span></div>
+      <div class="cmd"><code>stats</code><span>Token usage for this project.</span></div>
+    </div>
+
+    <div class="cmdgroup">
+      <h3>Chat &amp; sessions</h3>
+      <div class="cmd"><code>chat ["&lt;prompt&gt;"]</code><span>Tool-free conversation — no file edits.</span></div>
+      <div class="cmd"><code>chat list|delete &lt;id&gt;</code><span>Manage saved threads.</span></div>
+      <div class="cmd"><code>load &lt;id&gt;</code><span>Resume a specific session.</span></div>
+      <div class="cmd"><code>resume</code><span>Pick a recent session to resume.</span></div>
+    </div>
+
+    <div class="cmdgroup">
+      <h3>Crew</h3>
+      <div class="cmd"><code>crew "&lt;task&gt;"</code><span>Research → plan → N coders → audit → land.</span></div>
+      <div class="cmd"><code>crew accept|discard &lt;n&gt;</code><span>Apply held work into your folder, or throw it away.</span></div>
+      <div class="cmd"><code>crew steer &lt;n&gt; "…"</code><span>Talk to a running coder.</span></div>
+      <div class="cmd"><code>crew resume [id]</code><span>Finish an interrupted run; the director re-plans what's left.</span></div>
+      <div class="cmd"><code>crew role|pack</code><span>Personas the director assigns · saved crew configs.</span></div>
+      <div class="cmd"><code>board</code><span>Pending decisions.</span></div>
+      <div class="cmd"><code>route [--run] "…"</code><span>Show (or run) which model the brain picks.</span></div>
+    </div>
+
+    <div class="cmdgroup">
+      <h3>Context</h3>
+      <div class="cmd"><code>index build</code><span>Semantic code index (also: <code>status</code>, <code>clear</code>).</span></div>
+      <div class="cmd"><code>code-search "&lt;q&gt;"</code><span>Search the repo by meaning.</span></div>
+      <div class="cmd"><code>search "&lt;q&gt;"</code><span>Web search.</span></div>
+      <div class="cmd"><code>skills</code><span>Progressive-disclosure skills (list / add / install).</span></div>
+      <div class="cmd"><code>memory</code><span>Wiki-linked notes (new / list / show / graph).</span></div>
+    </div>
+
+    <div class="cmdgroup">
+      <h3>Ship it — the git workflow</h3>
+      <div class="cmd"><code>diff [--json]</code><span>The working-tree diff, for review.</span></div>
+      <div class="cmd"><code>commit [-a] [-m]</code><span>AI commit message; a leaked secret <b>blocks</b> it.</span></div>
+      <div class="cmd"><code>ship [--yes]</code><span>Stage → scan → AI commit → ask, then push.</span></div>
+      <div class="cmd"><code>pr create|review</code><span>Draft a PR · review one with the model (needs <code>gh</code>).</span></div>
+      <div class="cmd"><code>git &lt;sub&gt;</code><span>status, diff, log, branch, checkout, add, commit, push, pull, stash, show.</span></div>
+    </div>
+
+    <div class="cmdgroup">
+      <h3>Tests &amp; always-on</h3>
+      <div class="cmd"><code>test</code><span>Detect and run this project's tests.</span></div>
+      <div class="cmd"><code>verify [--max N]</code><span>Run them, and let the agent fix failures until green.</span></div>
+      <div class="cmd"><code>watch "&lt;task&gt;" [paths…]</code><span>Re-run a task whenever files change.</span></div>
+      <div class="cmd"><code>terminal &lt;sub&gt;</code><span>Named, long-lived ptys shared with the desktop app.</span></div>
+      <div class="cmd"><code>eval</code><span>Fixed task suite → a pass rate you can compare.</span></div>
+    </div>
+
+    <div class="cmdgroup">
+      <h3>Automation &amp; integration</h3>
+      <div class="cmd"><code>hooks</code><span>Shell hooks on tool/session events; PreToolUse blocks on non-zero exit.</span></div>
+      <div class="cmd"><code>commands · /&lt;name&gt;</code><span>Your own slash commands (prompt templates).</span></div>
+      <div class="cmd"><code>mcp serve|list|add|rm</code><span>Expose the toolset to any MCP client · manage servers.</span></div>
+      <div class="cmd"><code>scan [path]</code><span>Secret scanner (exit 1 on a high finding).</span></div>
+      <div class="cmd"><code>lsp [--port N]</code><span>Language server — completion, hover, go-to-def, diagnostics.</span></div>
+      <div class="cmd"><code>config get|set &lt;key&gt;</code><span>Read/write a dotted config key.</span></div>
+      <div class="cmd"><code>completion bash|zsh|fish</code><span>Print a sourceable completion script.</span></div>
+    </div>
+
+    <div class="note">
+      <b>Mix providers in one crew.</b> A model tag belongs to one backend, so the coder lists are positional:
+      <br><code>--coder-backends ollama,claude,codex --coder-models qwen3.5:9b,,</code>
+      <br>coder&nbsp;1 runs on qwen; coders&nbsp;2 and&nbsp;3 use their own backend's default.
+    </div>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>OllamaDev CLI — local-first AI coding, AGPL-3.0.</span>
+    <span><a href="https://github.com/kennethyork/OllamaDev-CLI">GitHub</a> · <a href="https://ollama.com">Ollama</a></span>
+  </div>
+</footer>
+
+<script>
+  // Respect an explicit theme choice if one is ever stamped on <html>; otherwise
+  // the CSS @media query already handles light/dark from the OS.
+  (function(){
+    try{
+      var t = localStorage.getItem('odv-theme');
+      if(t) document.documentElement.setAttribute('data-theme', t);
+    }catch(e){}
+  })();
+</script>
+</body>
+</html>

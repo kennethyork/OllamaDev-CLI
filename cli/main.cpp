@@ -47,7 +47,6 @@
 #include "Repl.h"
 #include "SecScan.h"
 #include "Skills.h"
-#include "Stt.h"
 #include "Terminals.h"
 #include "Tools.h"
 #include "Usage.h"
@@ -250,10 +249,6 @@ void printHelp() {
           << "  ollamadev mcp serve          expose these tools to any MCP client (stdio)\n"
           << "  ollamadev mcp list|add|rm    MCP servers this agent can call\n"
           << "  ollamadev scan [path]        secret scanner (exit 1 on a high finding)\n"
-          << "  ollamadev voice              record the mic and transcribe it (100% local)\n"
-          << "                               --setup fetch the engine · --model <size> ·\n"
-          << "                               --history [n] · --clear\n"
-          << "  ollamadev transcribe <file>  transcribe an audio file\n"
           << "  ollamadev lsp [--port N]     language server — AI completion, hover, go-to-def\n"
           << "                               and real diagnostics (php -l, py_compile, go vet,\n"
           << "                               gcc, rustc). stdio by default; --port for TCP\n"
@@ -1012,102 +1007,6 @@ int cmdDoctor() {
     out() << "CLIs        " << Backends::availableIds().join(", ") << "\n";
     out().flush();
     return up ? 0 : 1;
-}
-
-// `voice` records the mic and prints the transcript; `transcribe <file>` skips
-// the recording. Both are 100% local — see core/Stt.h for the three engines.
-int cmdVoice(const QStringList& args) {
-    if (hasFlag(args, "--clear")) {
-        Stt::clearHistory();
-        out() << "✓ voice history cleared\n";
-        out().flush();
-        return 0;
-    }
-    if (hasFlag(args, "--history")) {
-        const int n = flagValue(args, "--history", "10").toInt();
-        const auto h = Stt::history(n > 0 ? n : 10);
-        for (const auto& e : h) out() << "  " << e.value("text").toString() << "\n";
-        if (h.isEmpty()) out() << "no voice history\n";
-        out().flush();
-        return 0;
-    }
-
-    const QString size = flagValue(args, "--model");
-    if (!size.isEmpty()) Stt::setModelSize(size);
-
-    QString e;
-    if (hasFlag(args, "--setup")) {
-        out() << "▸ provisioning whisper.cpp into " << Stt::sttDir() << "\n";
-        out().flush();
-        const bool ok = Stt::provision(
-            [](const QString& label, qint64 done, qint64 total) {
-                if (total <= 0) return;
-                out() << QStringLiteral("\r  %1  %2%").arg(label).arg(done * 100 / total, 3);
-                out().flush();
-            },
-            {}, &e);
-        out() << "\n" << (ok ? "✓ ready" : "✗ " + e) << "\n";
-        out().flush();
-        return ok ? 0 : 1;
-    }
-
-    if (!Stt::Recorder::canRecord()) {
-        err() << "no recorder — install alsa-utils, ffmpeg, or pulseaudio-utils\n";
-        err().flush();
-        return 1;
-    }
-
-    Stt::Recorder rec;
-    if (!rec.start(&e)) {
-        err() << "✗ " << e << "\n";
-        err().flush();
-        return 1;
-    }
-
-    out() << "recording (" << Stt::modelSize() << ") — press Enter to stop…";
-    out().flush();
-    QTextStream in(stdin);
-    in.readLine();
-
-    const QString wav = rec.stop();
-    if (wav.isEmpty()) {
-        err() << "✗ nothing captured\n";
-        err().flush();
-        return 1;
-    }
-
-    out() << "▸ transcribing…\n";
-    out().flush();
-    const QString text = Stt::transcribe(wav, &e);
-    QFile::remove(wav);  // our temp file, by exact name
-
-    if (text.isEmpty()) {
-        err() << "✗ " << e << "\n";
-        err().flush();
-        return 1;
-    }
-    out() << text << "\n";
-    out().flush();
-    return 0;
-}
-
-int cmdTranscribe(const QStringList& args) {
-    const QString path = args.value(0);
-    if (path.isEmpty() || path.startsWith('-')) {
-        err() << "usage: ollamadev transcribe <audio-file>\n";
-        err().flush();
-        return 2;
-    }
-    QString e;
-    const QString text = Stt::transcribe(path, &e);
-    if (text.isEmpty()) {
-        err() << "✗ " << e << "\n";
-        err().flush();
-        return 1;
-    }
-    out() << text << "\n";
-    out().flush();
-    return 0;
 }
 
 int cmdOneShot(const QString& prompt, const QStringList& args) {
@@ -2821,7 +2720,7 @@ int cmdCompletion(const QStringList& args) {
     static const char* kTopLevel =
         "chat models backends doctor crew board index code-search search skills memory "
         "config completion load resume pull setup context stats diff commit ship pr git "
-        "test verify watch terminal hooks commands mcp scan voice transcribe lsp eval "
+        "test verify watch terminal hooks commands mcp scan lsp eval "
         "help --help --version --backend --model --continue --resume --new -h -v -m -c";
 
     if (shell == "bash") {
@@ -3059,8 +2958,6 @@ int main(int argc, char** argv) {
     if (cmd == "export") return cmdExport(rest);
     if (cmd == "import") return cmdImport(rest);
     if (cmd == "scan") return cmdScan(rest);
-    if (cmd == "voice") return cmdVoice(rest);
-    if (cmd == "transcribe") return cmdTranscribe(rest);
 
     if (cmd == "terminal") return cmdTerminal(rest);
     if (cmd == "watch") return cmdWatch(rest);

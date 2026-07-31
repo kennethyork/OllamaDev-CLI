@@ -231,15 +231,10 @@ static void testNoGlobalProcessNuking() {
     // Here every Pty is a child QObject of the widget that spawned it, so there is
     // nothing global to clean. Keep it that way.
     bool clean = true;
-    // core/Stt.cpp is in this list for the same reason: the PHP recorder
-    // backgrounded `arecord` through a shell and stopped it with `kill -INT
-    // <scraped pid>`. The port spawns it as a QProcess child and terminates that
-    // handle, so a kill-by-name here would be the same class of bug returning.
     // The ade/* files this guard also covers live in the desktop app, not in this
     // CLI-only tree, so they are checked in that repo. Here we scan the core files
     // the CLI actually ships.
     for (const QString& f : {QStringLiteral("core/Pty.cpp"),
-                             QStringLiteral("core/Stt.cpp"),
                              // core/Terminals.cpp is THE file the bug lived in — it is the
                              // port of the multiplexer that ran the boot-time pkill. A guard
                              // that covered everything except the crime scene was theatre.

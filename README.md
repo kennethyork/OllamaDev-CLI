@@ -49,7 +49,6 @@ ollamadev doctor                # health check
   wiki-linked `memory`, progressive-disclosure `skills`.
 - **Integration** — `mcp serve` (expose tools to any MCP client), `lsp` (completion,
   hover, go-to-def, diagnostics), `hooks`, custom `/slash` commands.
-- **Local voice** — `voice` / `transcribe` (100% on-device STT).
 
 Run `ollamadev --help` for the full command surface.
 

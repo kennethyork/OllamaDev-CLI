@@ -27,7 +27,6 @@ add_library(odv-core STATIC
     Workspaces.cpp Workspaces.h
     CodeIndex.cpp CodeIndex.h
     WebSearch.cpp WebSearch.h
-    Stt.cpp Stt.h
     Tui.cpp Tui.h
     Lsp.cpp Lsp.h
     Eval.cpp Eval.h

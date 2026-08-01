@@ -1183,6 +1183,56 @@ bool Crew::steer(int coder, const QString& message, QString* err) {
         if (err) *err = "no crew is running";
         return false;
     }
+
+    // Everything below is a refusal to write a message that nothing will ever
+    // read. Only a RUNNING coder drains steer.jsonl, and it drains only lines
+    // addressed to its own number (or 0, the whole-crew broadcast) — so a message
+    // aimed anywhere else sits in the file forever while the CLI says "✓ sent".
+    if (!b.value("active").toBool(false)) {
+        if (err) *err = "that crew run has finished — there is nobody left to steer";
+        return false;
+    }
+    // The consumer skips empty lines outright, so accepting one is pure theatre.
+    if (message.trimmed().isEmpty()) {
+        if (err) *err = "nothing to send — give a message";
+        return false;
+    }
+
+    // A coder can only hear while it is still working. `todo` counts: it has not
+    // started yet, and will drain the line on its first iteration.
+    const QJsonArray subs = b.value("subtasks").toArray();
+    int listening = 0;
+    bool found = false;
+    for (const QJsonValue& v : subs) {
+        const QJsonObject s = v.toObject();
+        const QString state = s.value("state").toString();
+        const bool canHear = state == QLatin1String("todo") || state == QLatin1String("doing");
+        if (canHear) ++listening;
+        if (s.value("n").toInt() == coder) {
+            found = true;
+            if (!canHear) {
+                if (err)
+                    *err = QStringLiteral("coder #%1 is already %2 — it cannot hear you")
+                               .arg(coder)
+                               .arg(state.isEmpty() ? QStringLiteral("finished") : state);
+                return false;
+            }
+        }
+    }
+    if (coder == 0) {  // broadcast
+        if (listening == 0) {
+            if (err) *err = "no coder is still working — there is nobody to broadcast to";
+            return false;
+        }
+    } else if (!found) {
+        if (err)
+            *err = QStringLiteral("no coder #%1 in this run (it has %2)")
+                       .arg(coder)
+                       .arg(subs.isEmpty() ? QStringLiteral("none")
+                                           : QStringLiteral("#1–#%1").arg(subs.size()));
+        return false;
+    }
+
     QFile f(runDir(runId) + "/steer.jsonl");
     QDir().mkpath(runDir(runId));
     if (!f.open(QIODevice::Append)) {

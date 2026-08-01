@@ -485,7 +485,13 @@ bool Evals::check(const QJsonObject& c, const QString& dir, QString* detail, boo
         return false;
     }
 
-    *detail = QStringLiteral("unknown check type: %1").arg(type);
+    // A hand-authored task in ./evals gets its verdict from here, so this message
+    // is the only feedback its author sees. "unknown check type: " with nothing
+    // after the colon — what a missing "type" key produces — told them nothing.
+    *detail = type.isEmpty()
+                  ? QStringLiteral("check has no \"type\" — use file_exists, file_contains or command")
+                  : QStringLiteral("unknown check type \"%1\" — use file_exists, file_contains or command")
+                        .arg(type);
     return false;
 }
 

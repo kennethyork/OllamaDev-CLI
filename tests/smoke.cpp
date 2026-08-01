@@ -601,6 +601,74 @@ static void testCrewSteer() {
     QDir(dir).removeRecursively();
 }
 
+// Steering only reaches a coder that is still working: the drain above runs
+// inside the coder loop, and it only takes lines addressed to its own number or
+// to 0. Crew::steer used to append regardless and return true, so talking to a
+// finished run — or to a coder that never existed — printed "✓ sent" and put the
+// message in a file nothing would ever read again.
+static void testCrewSteerRefusesTheUnreachable() {
+    const QString runId = QStringLiteral("crew_teststeer");
+    const QString dir = Config::crewDir() + QStringLiteral("/") + runId;
+    const QString boardPath = Config::crewDir() + QStringLiteral("/current.json");
+
+    // current.json is the live board — the developer's real one. Put it back.
+    QByteArray saved;
+    bool had = false;
+    {
+        QFile f(boardPath);
+        if (f.open(QIODevice::ReadOnly)) {
+            saved = f.readAll();
+            had = true;
+        }
+    }
+    QDir().mkpath(dir);
+
+    const auto setBoard = [&](bool active, const QString& state1, const QString& state2) {
+        QJsonArray subs{QJsonObject{{"n", 1}, {"state", state1}, {"title", "one"}},
+                        QJsonObject{{"n", 2}, {"state", state2}, {"title", "two"}}};
+        const QJsonObject o{{"runId", runId}, {"active", active}, {"subtasks", subs},
+                            {"task", "test"}};
+        QFile f(boardPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson());
+    };
+
+    QString err;
+    setBoard(true, QStringLiteral("doing"), QStringLiteral("done"));
+    check(Crew::steer(1, QStringLiteral("carry on"), &err), "steer reaches a coder that is working");
+    check(!Crew::steer(2, QStringLiteral("too late"), &err) && err.contains(QStringLiteral("done")),
+          "…and refuses one that has already finished, saying so");
+    check(!Crew::steer(99, QStringLiteral("nobody"), &err) && err.contains(QStringLiteral("#1–#2")),
+          "…and refuses a coder number this run never had, naming the range");
+    check(!Crew::steer(1, QStringLiteral("   "), &err),
+          "…and refuses an empty message, which the drain would drop anyway");
+    check(Crew::steer(0, QStringLiteral("everyone")), "a broadcast reaches the crew while one works");
+
+    // Nobody left to hear it.
+    setBoard(true, QStringLiteral("done"), QStringLiteral("held"));
+    check(!Crew::steer(0, QStringLiteral("hello?"), &err),
+          "a broadcast with every coder stopped is refused, not silently filed");
+
+    setBoard(false, QStringLiteral("doing"), QStringLiteral("doing"));
+    check(!Crew::steer(1, QStringLiteral("hello?"), &err) &&
+              err.contains(QStringLiteral("finished")),
+          "a run that is over cannot be steered at all");
+
+    // Only the lines that were accepted should have been written.
+    QFile sf(dir + QStringLiteral("/steer.jsonl"));
+    int lines = 0;
+    if (sf.open(QIODevice::ReadOnly))
+        for (const QByteArray& l : sf.readAll().split('\n'))
+            if (!l.trimmed().isEmpty()) ++lines;
+    check(lines == 2, "exactly the two accepted messages were written — the refusals wrote nothing");
+
+    QDir(dir).removeRecursively();
+    QFile::remove(boardPath);
+    if (had) {
+        QFile f(boardPath);
+        if (f.open(QIODevice::WriteOnly)) f.write(saved);
+    }
+}
+
 // Workspaces read and write the SAME ~/.ollamadev/workspaces.json the PHP app
 // uses, which means the two can be run side by side during the port. The blob the
 // desktop stores in `state` (canvas layout, terminal scrollback — tens of KB of
@@ -1485,7 +1553,7 @@ int main(int argc, char** argv) {
     s << "crew-amplify\n"; s.flush(); testCrewAmplify();
     s << "agent-tools\n"; s.flush(); testAgentTools();
     s << "vision\n";      s.flush(); testVision();
-    s << "crew-steer\n";  s.flush(); testCrewSteer();
+    s << "crew-steer\n";  s.flush(); testCrewSteer(); testCrewSteerRefusesTheUnreachable();
     s << "workspaces\n"; s.flush(); testWorkspaces();
     s << "plugins\n";    s.flush(); testPlugins();
     s << "export\n";     s.flush(); testExportImport();

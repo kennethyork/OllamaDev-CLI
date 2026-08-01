@@ -75,6 +75,37 @@ ollamadev -- status of the release    # `--` forces prompt text, not a command
 
 Run `ollamadev --help` for the full command surface.
 
+## Measuring it: `eval`
+
+`ollamadev eval` runs a fixed suite of small coding tasks and reports a pass
+rate. Every task runs isolated in its own temp dir, and the verdict is
+deterministic — expected file content, or a command's exit code — never a model
+judging another model. `--compare a,b,c` scores several models, `--json` is
+machine-readable, and `--min N` exits 1 below N% so CI can gate on it.
+
+Your own tasks join the suite: drop `*.json` into `./evals` or
+`./.ollamadev/evals`.
+
+```json
+{
+  "name": "sum-helper",
+  "prompt": "Create sum.py with total(xs) returning the sum of a list.",
+  "files": { "note.txt": "optional seed files for the working dir\n" },
+  "check": { "type": "command", "cmd": "python3 -c \"from sum import total; assert total([1,2,3])==6\"" }
+}
+```
+
+`check.type` is one of:
+
+| type | keys | passes when |
+| --- | --- | --- |
+| `file_exists` | `path` | the file is there |
+| `file_contains` | `path`, `needle`, `normalize` | the file contains the needle (`normalize` ignores whitespace) |
+| `command` | `cmd`, `expect` | the command exits 0 (and its output contains `expect`, if given) |
+
+A check whose interpreter is missing is **skipped**, not failed — it stays out of
+the denominator, so the rate measures the model rather than the box.
+
 ## Layout
 
 ```

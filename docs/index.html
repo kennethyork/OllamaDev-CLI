@@ -316,7 +316,8 @@
       <div class="cmd"><code>verify [--max N]</code><span>Run them, and let the agent fix failures until green.</span></div>
       <div class="cmd"><code>watch "&lt;task&gt;" [paths…]</code><span>Re-run a task whenever files change.</span></div>
       <div class="cmd"><code>terminal &lt;sub&gt;</code><span>Named, long-lived ptys shared with the desktop app.</span></div>
-      <div class="cmd"><code>eval</code><span>Fixed task suite → a pass rate you can compare.</span></div>
+      <div class="cmd"><code>eval</code><span>Fixed task suite → a pass rate you can compare. <code>--only &lt;task&gt;</code> · <code>--compare a,b,c</code> · <code>--json</code> · <code>--min N</code> (exit 1 below N%) · <code>--keep</code>. Verdicts are deterministic — expected file content or a command's exit code, never a model judging a model.</span></div>
+      <div class="cmd"><code>eval (your own tasks)</code><span>Drop <code>*.json</code> in <code>./evals</code> or <code>./.ollamadev/evals</code> and they join the suite. Each needs <code>name</code>, <code>prompt</code> and <code>check</code>; optional <code>files</code> seeds the isolated working dir. Check types: <code>file_exists</code> (<code>path</code>), <code>file_contains</code> (<code>path</code>, <code>needle</code>, optional <code>normalize</code> to ignore whitespace), <code>command</code> (<code>cmd</code>, optional <code>expect</code> substring). A check whose interpreter is missing is skipped, not failed.</span></div>
     </div>
 
     <div class="cmdgroup">

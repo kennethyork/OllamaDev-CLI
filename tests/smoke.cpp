@@ -34,6 +34,7 @@
 #include "Session.h"
 #include "Update.h"
 #include "Tools.h"
+#include "Tui.h"
 #include "Crew.h"
 #include "Vision.h"
 #include "Workspaces.h"
@@ -343,7 +344,14 @@ static void testCrewAmplify() {
           "CLI: --amplify wins over the pack, the pack over the default");
     check(cli.contains("CrewPacks::load(packName)"),
           "crew --pack loads a saved team as the base (it used to load nothing)");
-    check(cli.contains("\"--amplify\",         \"--pack\""),
+    // Both must sit in the value-taking list or positionals() reads their argument
+    // as the task. Matched against the function body rather than a fixed run of
+    // spaces, so reformatting the list cannot fail this for the wrong reason.
+    const int listStart = cli.indexOf(QStringLiteral("flagsTakingValue()"));
+    const int listEnd = cli.indexOf(QStringLiteral("return v;"), listStart);
+    const QString valueFlags = listStart < 0 ? QString() : cli.mid(listStart, listEnd - listStart);
+    check(valueFlags.contains(QStringLiteral("\"--amplify\"")) &&
+              valueFlags.contains(QStringLiteral("\"--pack\"")),
           "--amplify/--pack take a value, so they never swallow the task word");
 
     // The real bug this guards: a pack key that no run reads. If someone adds a
@@ -1312,6 +1320,155 @@ static void testSessionResume() {
     QDir::setCurrent(cwd);
 }
 
+// --------------------------------------------------------------------------
+// Argument handling. A CLI that ignores what it does not understand reports
+// success for work it never did — these guard the three ways that used to
+// happen: a mistyped flag, a mistyped subcommand, and colour written to a pipe.
+// --------------------------------------------------------------------------
+
+struct CliRun {
+    int code = -1;
+    QString out, err;
+};
+
+// `home` and `cwd`, when given, isolate the run: HOME decides where
+// ~/.ollamadev (and so workspaces.json) is read from, so a test can set up a
+// whole config without touching the developer's real one.
+static CliRun runCli(const QStringList& args, const QByteArray& stdinData = {},
+                     const QString& home = {}, const QString& cwd = {}) {
+    CliRun r;
+    QProcess p;
+    p.setProgram(QStringLiteral(ODV_CLI_BIN));
+    p.setArguments(args);
+    if (!cwd.isEmpty()) p.setWorkingDirectory(cwd);
+    if (!home.isEmpty()) {
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert(QStringLiteral("HOME"), home);
+        p.setProcessEnvironment(env);
+    }
+    p.start();
+    if (!p.waitForStarted(5000)) return r;
+    p.write(stdinData);
+    p.closeWriteChannel();
+    if (!p.waitForFinished(30000)) {
+        p.kill();
+        p.waitForFinished(2000);
+        return r;
+    }
+    r.code = p.exitCode();
+    r.out = QString::fromUtf8(p.readAllStandardOutput());
+    r.err = QString::fromUtf8(p.readAllStandardError());
+    return r;
+}
+
+static void testCliArgChecking() {
+    // A flag we do not know used to be dropped in silence: `models --jsn` printed
+    // a plain list and exited 0, so a script piping it into jq failed on valid-
+    // looking success.
+    const CliRun badFlag = runCli({"models", "--jsn"});
+    check(badFlag.code == 2, "a mistyped flag exits 2 instead of pretending to work");
+    check(badFlag.err.contains(QStringLiteral("unknown option: --jsn")),
+          "…and says which flag it was");
+    check(badFlag.err.contains(QStringLiteral("--json")),
+          "…and suggests the flag that was meant");
+    check(badFlag.out.isEmpty(), "…and prints nothing to stdout, so a pipe sees no output");
+
+    // The suggestion must not fire on a flag that is genuinely ours.
+    const CliRun help = runCli({"--help"});
+    check(help.code == 0 && help.out.contains(QStringLiteral("Usage:")),
+          "a real flag is still accepted");
+
+    // A lone word that is nearly a subcommand is a typo. It used to fall through
+    // to the model, which answered it as a question — a wasted call.
+    const CliRun typo = runCli({"comit"});
+    check(typo.code == 2, "a mistyped subcommand exits 2");
+    check(typo.err.contains(QStringLiteral("did you mean `ollamadev commit`")),
+          "…and names the command that was meant");
+
+    // …but a command that forwards its tail must NOT have that tail judged: git's
+    // flags are git's business.
+    const CliRun passthru = runCli({"git", "--this-is-gits-problem"});
+    check(!passthru.err.contains(QStringLiteral("unknown option:")),
+          "a pass-through command's flags are left to the program that owns them");
+
+    // The escape hatch has to exist, because quoting cannot provide one: the shell
+    // strips quotes, so `ollamadev "comit"` reaches main() as the same argv.
+    check(help.out.contains(QStringLiteral("ollamadev -- <prompt>")),
+          "--help documents `--` as the way to force prompt text");
+}
+
+// The CLI must act on the folder it was run in. It used to chdir into the
+// "active workspace" whenever cwd was not itself bookmarked — so with $HOME
+// bookmarked and active, a one-shot in a scratch directory went and edited files
+// in the home directory, under a permission mode that approves its own writes.
+static void testCwdWinsOverActiveWorkspace() {
+    QTemporaryDir home, elsewhere, proj;
+    if (!home.isValid() || !elsewhere.isValid() || !proj.isValid()) {
+        check(false, "cwd/workspace: temp dirs");
+        return;
+    }
+    QDir().mkpath(home.path() + QStringLiteral("/.ollamadev"));
+
+    // An active workspace pointing somewhere else entirely, and a project folder
+    // that is deliberately NOT bookmarked.
+    QJsonObject ws;
+    ws.insert(QStringLiteral("id"), QStringLiteral("ws_elsewhere"));
+    ws.insert(QStringLiteral("name"), QStringLiteral("elsewhere"));
+    ws.insert(QStringLiteral("path"), elsewhere.path());
+    QJsonObject wsFile;
+    wsFile.insert(QStringLiteral("active"), QStringLiteral("ws_elsewhere"));
+    wsFile.insert(QStringLiteral("workspaces"), QJsonArray{ws});
+    QFile f(home.path() + QStringLiteral("/.ollamadev/workspaces.json"));
+    check(f.open(QIODevice::WriteOnly), "cwd/workspace: wrote a workspaces.json");
+    f.write(QJsonDocument(wsFile).toJson());
+    f.close();
+
+    // The REPL is the probe: it is one of the paths that reconciles the working
+    // directory, and /pwd reports the answer without needing a model.
+    const QByteArray script = QByteArrayLiteral("/pwd\n/exit\n");
+
+    const CliRun stay = runCli({}, script, home.path(), proj.path());
+    if (!stay.out.contains(QStringLiteral("/pwd")) && stay.out.trimmed().isEmpty()) {
+        check(true, "cwd/workspace: REPL unavailable here — skipped");
+        return;
+    }
+    check(stay.out.contains(proj.path()),
+          "a run in an unbookmarked folder acts on THAT folder, not the active workspace");
+    check(!stay.out.contains(elsewhere.path()) && !stay.err.contains(QStringLiteral("working in")),
+          "…and does not redirect itself out of the launch directory");
+
+    // The desktop-style behaviour is still reachable, but only on request.
+    QFile cfg(home.path() + QStringLiteral("/.ollamadev/config.json"));
+    check(cfg.open(QIODevice::WriteOnly), "cwd/workspace: wrote a config.json");
+    cfg.write(QByteArrayLiteral("{\"workspace\":{\"follow\":true}}"));
+    cfg.close();
+    const CliRun follow = runCli({}, script, home.path(), proj.path());
+    check(follow.out.contains(elsewhere.path()) || follow.err.contains(QStringLiteral("working in")),
+          "workspace.follow=true opts back in to following the active project");
+}
+
+static void testColorGating() {
+    // The suite's stdout is a pipe, which is exactly the case that used to spray
+    // escape bytes into redirected output.
+    check(!Tui::colorEnabled(), "colour is off when stdout is not a tty");
+
+    // Belt and braces: the environment gates must hold independently of the tty.
+    const QByteArray noColor = qgetenv("NO_COLOR");
+    qputenv("NO_COLOR", "1");
+    check(!Tui::colorEnabled(), "NO_COLOR turns colour off");
+    check(Tui::paint(ansi::kGreen) == QLatin1String(""),
+          "paint() yields an empty escape when colour is off");
+    if (noColor.isEmpty())
+        qunsetenv("NO_COLOR");
+    else
+        qputenv("NO_COLOR", noColor);
+
+    // The banner, the prompt and /help all used to go out coloured regardless.
+    const CliRun repl = runCli({}, QByteArray("/exit\n"));
+    check(!repl.out.contains(QLatin1Char('\033')),
+          "the REPL writes no escape bytes when its output is a pipe");
+}
+
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     Config::load();
@@ -1339,6 +1496,9 @@ int main(int argc, char** argv) {
     s << "worktree\n";   s.flush(); testWorktreeSandbox();
     s << "git-model\n";  s.flush(); testGitModel();
     s << "session-resume\n"; s.flush(); testSessionResume();
+    s << "cli-args\n";   s.flush(); testCliArgChecking();
+    s << "cwd\n";        s.flush(); testCwdWinsOverActiveWorkspace();
+    s << "color\n";      s.flush(); testColorGating();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";
     s.flush();

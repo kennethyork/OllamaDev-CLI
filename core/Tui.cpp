@@ -121,6 +121,23 @@ int Tui::height() {
 bool Tui::stdoutIsTty() { return ::isatty(STDOUT_FILENO) == 1; }
 bool Tui::stdinIsTty() { return ::isatty(STDIN_FILENO) == 1; }
 
+namespace {
+// The half of the decision that does not depend on which stream we are writing
+// to. Not cached: a long-lived process (the REPL, a watch) can have its streams
+// reopened under it, and the cost is two getenvs plus a config lookup.
+bool colorAllowed() {
+    if (!qEnvironmentVariableIsEmpty("NO_COLOR")) return false;
+    if (qgetenv("TERM") == QByteArrayLiteral("dumb")) return false;
+    return Config::boolean(QStringLiteral("ui.color"), true);
+}
+}  // namespace
+
+bool Tui::colorEnabled() { return colorAllowed() && stdoutIsTty(); }
+bool Tui::colorEnabledErr() { return colorAllowed() && ::isatty(STDERR_FILENO) == 1; }
+
+const char* Tui::paint(const char* escape) { return colorEnabled() ? escape : ""; }
+const char* Tui::paintErr(const char* escape) { return colorEnabledErr() ? escape : ""; }
+
 int Tui::charWidth(char32_t cp) {
     if (cp == 0) return 0;
     if (cp < 0x20 || (cp >= 0x7F && cp < 0xA0)) return 0;  // control: prints nothing
@@ -264,8 +281,7 @@ QString renderCode(const QStringList& code) {
 
 bool Render::enabled() {
     if (!Config::boolean(QStringLiteral("ui.markdown"), true)) return false;
-    if (!qEnvironmentVariableIsEmpty("NO_COLOR")) return false;
-    return Tui::stdoutIsTty();
+    return Tui::colorEnabled();
 }
 
 QString Render::markdown(const QString& text) {

@@ -251,9 +251,18 @@
     <p class="sub">The full surface. Run <code>ollamadev --help</code> for options on any command.</p>
 
     <div class="cmdgroup">
+      <h3>How it behaves in a shell</h3>
+      <div class="cmd"><code>working directory</code><span>Every command acts on the folder you ran it in. If that folder is a bookmarked workspace it is also published as active, so the desktop app follows along — but the CLI never moves itself. Set <code>workspace.follow true</code> to opt in to the old desktop-style behaviour of following the active project from anywhere.</span></div>
+      <div class="cmd"><code>colour</code><span>ANSI styling only when the stream is a terminal. Honours <code>NO_COLOR</code>, <code>TERM=dumb</code> and <code>ui.color false</code>; stdout and stderr are judged separately, so redirecting one keeps colour on the other.</span></div>
+      <div class="cmd"><code>exit codes</code><span><code>0</code> success · <code>1</code> the command ran and reported a problem (no index, a leaked secret, tests red) · <code>2</code> the command line itself was wrong.</span></div>
+      <div class="cmd"><code>unknown input</code><span>A flag or subcommand that is not recognised is an error with a suggestion, never a silent no-op. Flags after <code>git</code>, <code>mcp</code> and <code>terminal</code> belong to the program being wrapped and are passed through untouched.</span></div>
+    </div>
+
+    <div class="cmdgroup">
       <h3>Core</h3>
       <div class="cmd"><code>ollamadev</code><span>Interactive chat, auto-resumes this folder (<code>--new</code> for fresh).</span></div>
-      <div class="cmd"><code>ollamadev "&lt;prompt&gt;"</code><span>One-shot agent turn.</span></div>
+      <div class="cmd"><code>ollamadev "&lt;prompt&gt;"</code><span>One-shot agent turn. Piped stdin is appended, so <code>git diff | ollamadev "review this"</code> works.</span></div>
+      <div class="cmd"><code>ollamadev -- &lt;prompt&gt;</code><span>Everything after <code>--</code> is prompt text — for when the prompt itself looks like a command or a flag.</span></div>
       <div class="cmd"><code>backends</code><span>Which providers are installed and how wide they run.</span></div>
       <div class="cmd"><code>models [presets|cloud|chain]</code><span>List models on the active backend · curated catalog + fallback chain.</span></div>
       <div class="cmd"><code>agents [show &lt;n&gt;]</code><span>File-defined subagent personas from <code>.ollamadev/agents/*.md</code>.</span></div>

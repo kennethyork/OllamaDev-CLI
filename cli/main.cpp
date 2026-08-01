@@ -49,6 +49,7 @@
 #include "Skills.h"
 #include "Terminals.h"
 #include "Tools.h"
+#include "Tui.h"
 #include "Usage.h"
 #include "Verify.h"
 #include "Vision.h"
@@ -74,6 +75,12 @@ QTextStream& err() {
     return s;
 }
 
+// An ANSI escape on the way to a terminal, and "" on the way to a pipe, a file
+// or a NO_COLOR shell. Every styled write below goes through one of these, so
+// `ollamadev diff | patch` and `ollamadev commit > log` stay clean bytes.
+const char* co(const char* escape) { return Tui::paint(escape); }     // stdout
+const char* ce(const char* escape) { return Tui::paintErr(escape); }  // stderr
+
 bool hasFlag(const QStringList& a, const QString& f) { return a.contains(f); }
 
 QString flagValue(const QStringList& a, const QString& f, const QString& fallback = {}) {
@@ -93,22 +100,35 @@ QStringList flagList(const QStringList& a, const QString& f) {
     return v.split(',', Qt::KeepEmptyParts);
 }
 
+// Flags whose NEXT argument belongs to them. A flag missing from this list has
+// its value read as a positional, which is how `--out report.md export` used to
+// see "report.md" as the command.
+const QStringList& flagsTakingValue() {
+    static const QStringList v{
+        "--backend",           "-m",
+        "--model",             "--max",
+        "--parallel",          "--focus",
+        "--coder-backend",     "--coder-model",
+        "--coder-backends",    "--coder-models",
+        "--director-backend",  "--director-model",
+        "--auditor-backend",   "--auditor-model",
+        "--researcher-backend", "--researcher-model",
+        "--session",           "--swarm",
+        "--amplify",           "--pack",
+        "--land",              "--out",
+        "--desc",              "--tags",
+        "--cwd",               "--port",
+        "--min",               "--only",
+        "--compare",           "--interval",
+        "--base"};
+    return v;
+}
+
 // Everything that is not a flag or a flag's value: the command, or the words of a
 // one-shot prompt. Used to tell `ollamadev -m qwen3.5:9b` (start the REPL on that
 // model) apart from `ollamadev fix the parser` (one shot).
 QStringList positionals(const QStringList& a) {
-    static const QStringList takesValue{
-        "--backend",         "-m",
-        "--model",           "--max",
-        "--parallel",        "--focus",
-        "--coder-backend",   "--coder-model",
-        "--coder-backends",  "--coder-models",
-        "--director-backend", "--director-model",
-        "--auditor-backend", "--auditor-model",
-        "--researcher-backend", "--researcher-model",
-        "--session",         "--swarm",
-        "--amplify",         "--pack",
-        "--land"};
+    const QStringList& takesValue = flagsTakingValue();
     QStringList out;
     for (int i = 0; i < a.size(); ++i) {
         const QString& t = a.at(i);
@@ -121,17 +141,134 @@ QStringList positionals(const QStringList& a) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Typo handling. A CLI that quietly ignores what it does not understand lies
+// about what it did: `models --jsn` exited 0 having printed no JSON at all, and
+// `ollamadev comit` spent a model call answering a subcommand as if it were a
+// question. Both are now errors with a suggestion.
+// ---------------------------------------------------------------------------
+
+// Every subcommand main() dispatches on, in the order the help lists them.
+const QStringList& knownCommands() {
+    static const QStringList v{
+        "acp",       "agents",   "backends", "board",    "chat",     "code-search",
+        "commands",  "commit",   "completion", "config",  "context",  "crew",
+        "diff",      "doctor",   "eval",     "export",   "git",      "hooks",
+        "import",    "index",    "load",     "lsp",      "mcp",      "memory",
+        "models",    "plugin",   "plugins",  "pr",       "pull",     "resume",
+        "route",     "scan",     "search",   "setup",    "ship",     "skills",
+        "stats",     "terminal", "test",     "tidy",     "update",   "upgrade",
+        "verify",    "watch",    "workspace", "ws"};
+    return v;
+}
+
+// Every flag the CLI reads for itself. Flags we merely forward to another
+// program (git's --oneline, gh's --title) are deliberately absent — the commands
+// that forward are exempted from checking instead, in forwardsUnknownArgs().
+const QStringList& knownFlags() {
+    static const QStringList v = [] {
+        QStringList f{
+            "-a",          "-c",           "-h",          "-m",          "-n",
+            "-v",          "--all",        "--allow-writes", "--comment", "--continue",
+            "--debate",    "--dedupe",     "--dry-run",   "--force",     "--help",
+            "--install",   "--json",       "--keep",      "--learn",     "--new",
+            "--no-audit",  "--no-research", "--no-web",   "--once",      "--readonly",
+            "--replay",    "--review",     "--route",     "--run",       "--security",
+            "--version",   "--yes"};
+        // Anything that takes a value is a flag too; keeping one list avoids the
+        // two drifting apart.
+        f += flagsTakingValue();
+        f.removeDuplicates();
+        return f;
+    }();
+    return v;
+}
+
+// Commands whose tail is somebody else's argv. `ollamadev git log --oneline`,
+// `mcp add fs npx -y @x/server`, `terminal spawn build make -j8`: those flags are
+// not ours to validate, and rejecting them would break the pass-through.
+bool forwardsUnknownArgs(const QString& cmd) {
+    return cmd == "git" || cmd == "mcp" || cmd == "terminal" || cmd == "acp" ||
+           cmd.startsWith('/');
+}
+
+// Levenshtein, capped: we only ever care whether a word is within a couple of
+// edits, so the full matrix is fine at these lengths.
+int editDistance(const QString& a, const QString& b) {
+    QVector<int> prev(b.size() + 1), cur(b.size() + 1);
+    for (int j = 0; j <= b.size(); ++j) prev[j] = j;
+    for (int i = 1; i <= a.size(); ++i) {
+        cur[0] = i;
+        for (int j = 1; j <= b.size(); ++j) {
+            const int cost = a.at(i - 1) == b.at(j - 1) ? 0 : 1;
+            cur[j] = qMin(qMin(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+        }
+        prev = cur;
+    }
+    return prev[b.size()];
+}
+
+// The closest candidate within `maxDist` edits, or empty. A prefix match wins
+// outright, so `ollamadev comm` suggests "commit" rather than nothing.
+QString nearest(const QString& word, const QStringList& pool, int maxDist = 2) {
+    QString best;
+    int bestDist = maxDist + 1;
+    for (const QString& c : pool) {
+        if (c.size() > word.size() && c.startsWith(word) && word.size() >= 3) return c;
+        const int d = editDistance(word, c);
+        if (d < bestDist) {
+            bestDist = d;
+            best = c;
+        }
+    }
+    return bestDist <= maxDist ? best : QString();
+}
+
+// Returns 0 when every flag is one of ours, or 2 after printing what went wrong.
+// `cmd` is empty for the bare REPL / one-shot forms, which are still checked —
+// a mistyped `--mdoel` there silently ran on the default model.
+int checkFlags(const QString& cmd, const QStringList& args) {
+    if (forwardsUnknownArgs(cmd)) return 0;
+    const QStringList& known = knownFlags();
+    const QStringList& takesValue = flagsTakingValue();
+    for (int i = 0; i < args.size(); ++i) {
+        const QString& t = args.at(i);
+        if (!t.startsWith('-') || t == QLatin1String("-")) continue;
+        if (known.contains(t)) {
+            // Skip the value so a message that opens with a dash — `commit -m
+            // "-Wall was wrong"` — is not itself read as a flag.
+            if (takesValue.contains(t)) ++i;
+            continue;
+        }
+        err() << "unknown option: " << t << "\n";
+        const QString guess = nearest(t, known);
+        if (!guess.isEmpty()) err() << "did you mean " << guess << "?\n";
+        err() << "run `ollamadev --help` for the full list, or put it after `--` to "
+                 "send it as prompt text.\n";
+        err().flush();
+        return 2;
+    }
+    return 0;
+}
+
 // Reconcile the CLI's working directory with the shared "current project" — the
-// active workspace the desktop also follows (~/.ollamadev/workspaces.json). Scoped
-// to folders already bookmarked as workspaces, so a throwaway run in /tmp never
-// disturbs it. Three cases:
-//   * cwd is at or inside a bookmarked workspace -> that IS the current project;
-//     publish it as active (the desktop follows) and stay put. The deepest such
-//     workspace wins, so a project nested under a broader one is picked correctly.
-//   * cwd is unrelated to any workspace -> FOLLOW the active workspace: chdir into
-//     it, so `ollamadev` from anywhere reopens the project you (or the desktop)
-//     last had active, and auto-resume picks up its session.
-//   * no active workspace -> stay in cwd (the historical behaviour).
+// active workspace the desktop also follows (~/.ollamadev/workspaces.json).
+//
+// THE WORKING DIRECTORY WINS. A terminal command acts on the folder you ran it
+// in; that is the whole contract, and an agent that edits files has to honour it
+// more strictly than most. This used to chdir into the active workspace whenever
+// cwd was not itself bookmarked, which meant that with `$HOME` bookmarked and
+// active — an easy thing to do by accident — `ollamadev "fix the test"` run in a
+// scratch directory went and edited files in the home directory instead, on a
+// permission mode that approves its own writes.
+//
+// So: if cwd is at or inside a bookmarked workspace, publish it as active (the
+// desktop follows along) and stay put — the deepest match wins, so a project
+// nested under a broader one is picked correctly. Otherwise stay put anyway.
+//
+// Following the active workspace from an unrelated directory is still available
+// for anyone who wants the desktop-style behaviour, but it is now opt-in:
+//   ollamadev config set workspace.follow true
 void syncCurrentProject() {
     const QString cwdCanon = QFileInfo(QDir::currentPath()).canonicalFilePath();
     const QVector<Workspace> all = Workspaces::all();
@@ -149,6 +286,10 @@ void syncCurrentProject() {
         Workspaces::open(enclosing->id);  // mark active + bump lastOpened
         return;
     }
+
+    // cwd is unrelated to any bookmark. Stay in it unless the user has explicitly
+    // asked to follow the active project instead.
+    if (!Config::boolean(QStringLiteral("workspace.follow"), false)) return;
 
     const QString activeId = Workspaces::activeId();
     if (activeId.isEmpty()) return;
@@ -172,7 +313,8 @@ void printHelp() {
     out() << "OllamaDev " << ODV_VERSION << " — Ollama and every major coding CLI, in parallel\n\n"
           << "Usage: ollamadev [command] [options]\n\n"
           << "  ollamadev                    interactive chat (auto-resumes this folder; --new for fresh)\n"
-          << "  ollamadev \"<prompt>\"        one-shot agent turn\n"
+          << "  ollamadev \"<prompt>\"        one-shot agent turn (stdin is appended if piped)\n"
+          << "  ollamadev -- <prompt>        …when the prompt looks like a command or a flag\n"
           << "  ollamadev backends           which providers are installed and how wide they run\n"
           << "  ollamadev models             list models on the active backend\n"
           << "  ollamadev models presets|cloud|chain [--json]   curated catalog + fallback chain\n"
@@ -1009,6 +1151,25 @@ int cmdDoctor() {
     return up ? 0 : 1;
 }
 
+// Anything piped in becomes part of the prompt. `git diff | ollamadev "review
+// this"` and `ollamadev "summarise" < notes.md` used to send only the quoted
+// words and drop the input on the floor. Only read when stdin is NOT a tty:
+// with a terminal on stdin there is nothing to read and we would just hang.
+constexpr qint64 kStdinMaxBytes = 1 << 20;  // 1 MiB — past this it is not a prompt
+
+QString pipedStdin() {
+    if (Tui::stdinIsTty()) return {};
+    QFile in;
+    if (!in.open(stdin, QIODevice::ReadOnly)) return {};
+    const QByteArray data = in.read(kStdinMaxBytes + 1);
+    if (data.size() > kStdinMaxBytes) {
+        err() << "note: stdin truncated to " << (kStdinMaxBytes / 1024) << " KiB\n";
+        err().flush();
+        return QString::fromUtf8(data.left(kStdinMaxBytes));
+    }
+    return QString::fromUtf8(data);
+}
+
 int cmdOneShot(const QString& prompt, const QStringList& args) {
     // A one-shot follows the shared current project too: run it from an unrelated
     // dir and it works in (and edits) the active workspace, same as the REPL. Must
@@ -1045,13 +1206,24 @@ int cmdOneShot(const QString& prompt, const QStringList& args) {
     Permission::setInteractive(true);
     Tools::setThreadRoot(QDir::currentPath());
 
+    // Piped input is fenced off below the instruction rather than concatenated
+    // raw, so a diff full of ``` or "### " cannot be read as part of the ask.
+    QString full = prompt;
+    const QString piped = pipedStdin();
+    if (!piped.trimmed().isEmpty()) {
+        if (full.isEmpty())
+            full = piped;
+        else
+            full += QStringLiteral("\n\n<stdin>\n") + piped + QStringLiteral("\n</stdin>");
+    }
+
     // A one-shot takes a prompt exactly like the REPL does, so it gets vision
     // exactly like the REPL does: `ollamadev "what is wrong with @screenshot.png"`
     // used to send the model the literal text "@screenshot.png" and nothing else.
     ChatMessage user;
     user.role = QStringLiteral("user");
     int attached = 0;
-    user.content = Vision::attach(user, prompt, &attached);
+    user.content = Vision::attach(user, full, &attached);
     if (attached > 0) {
         err() << "attached " << attached << " image(s)\n";
         err().flush();
@@ -1724,13 +1896,13 @@ int cmdDiff(const QStringList& args) {
         // +++/--- are headers, not content; colouring them as add/remove makes every
         // hunk look like it both added and deleted a file.
         if (line.startsWith("+++") || line.startsWith("---"))
-            out() << "\033[1m" << line << "\033[0m\n";
+            out() << co(ansi::kBold) << line << co(ansi::kReset) << "\n";
         else if (line.startsWith('+'))
-            out() << "\033[32m" << line << "\033[0m\n";
+            out() << co(ansi::kGreen) << line << co(ansi::kReset) << "\n";
         else if (line.startsWith('-'))
-            out() << "\033[31m" << line << "\033[0m\n";
+            out() << co(ansi::kRed) << line << co(ansi::kReset) << "\n";
         else if (line.startsWith("@@"))
-            out() << "\033[36m" << line << "\033[0m\n";
+            out() << co(ansi::kCyan) << line << co(ansi::kReset) << "\n";
         else
             out() << line << "\n";
     }
@@ -1741,7 +1913,7 @@ int cmdDiff(const QStringList& args) {
 // Shared reporting for commit/ship, so a blocked commit reads the same either way.
 int reportCommit(const CommitResult& r) {
     if (r.blocked) {
-        err() << "\n\033[31m✗ blocked: " << r.error << "\033[0m\n";
+        err() << "\n" << ce(ansi::kRed) << "✗ blocked: " << r.error << ce(ansi::kReset) << "\n";
         printFindings(r.findings);
         err() << "\nFix them, or commit anyway with --force.\n";
         err().flush();
@@ -1752,7 +1924,8 @@ int reportCommit(const CommitResult& r) {
         err().flush();
         return 1;
     }
-    out() << "\033[32m✓ committed\033[0m " << r.sha << "\n\n" << r.message << "\n";
+    out() << co(ansi::kGreen) << "✓ committed" << co(ansi::kReset) << " " << r.sha << "\n\n"
+          << r.message << "\n";
     out().flush();
     return 0;
 }
@@ -1777,7 +1950,7 @@ int cmdCommit(const QStringList& args) {
     o.model = gitModel(args);
 
     if (o.message.isEmpty()) {
-        out() << "\033[2mwriting a commit message…\033[0m\n";
+        out() << co(ansi::kDim) << "writing a commit message…" << co(ansi::kReset) << "\n";
         out().flush();
     }
     // No Confirm: plain `commit` is not a remote-visible step, so it just commits.
@@ -1796,7 +1969,8 @@ int cmdShip(const QStringList& args) {
     o.model = gitModel(args);
 
     if (o.message.isEmpty()) {
-        out() << "\033[2mstaging, scanning, writing a commit message…\033[0m\n";
+        out() << co(ansi::kDim) << "staging, scanning, writing a commit message…" << co(ansi::kReset)
+              << "\n";
         out().flush();
     }
 
@@ -1810,11 +1984,11 @@ int cmdShip(const QStringList& args) {
     if (!r.commit.ok) return reportCommit(r.commit);
     reportCommit(r.commit);
     if (r.pushed) {
-        out() << "\033[32m✓ pushed\033[0m\n";
+        out() << co(ansi::kGreen) << "✓ pushed" << co(ansi::kReset) << "\n";
         out().flush();
         return 0;
     }
-    err() << "\033[33m" << r.error << "\033[0m\n";
+    err() << ce(ansi::kYellow) << r.error << ce(ansi::kReset) << "\n";
     err().flush();
     return r.error == "committed, not pushed" ? 0 : 1;
 }
@@ -1850,13 +2024,13 @@ int cmdPr(const QStringList& args) {
             return 1;
         }
 
-        out() << "\033[2mdrafting the PR…\033[0m\n";
+        out() << co(ansi::kDim) << "drafting the PR…" << co(ansi::kReset) << "\n";
         out().flush();
         QString title, body;
         GitFlow::prText(commits, diff, gitBackend(args), GitFlow::modelFor(gitModel(args)), &title,
                         &body, CancelToken{});
 
-        out() << "\n\033[1m" << title << "\033[0m\n\n" << body << "\n\n";
+        out() << "\n" << co(ansi::kBold) << title << co(ansi::kReset) << "\n\n" << body << "\n\n";
         out().flush();
         if (!askYesNo("Open this PR?")) {
             out() << "cancelled\n";
@@ -1906,7 +2080,7 @@ int cmdPr(const QStringList& args) {
             return 1;
         }
 
-        out() << "\033[2mreviewing PR #" << n << "…\033[0m\n";
+        out() << co(ansi::kDim) << "reviewing PR #" << n << "…" << co(ansi::kReset) << "\n";
         out().flush();
         const PrReview rv =
             GitFlow::review(diff, gitBackend(args), GitFlow::modelFor(gitModel(args)),
@@ -1996,7 +2170,7 @@ int cmdTest(const QStringList&) {
     const auto t = detectTests();
     if (!t) return 1;
 
-    out() << "\033[2m[" << t->label << "] " << t->cmd << "\033[0m\n";
+    out() << co(ansi::kDim) << "[" << t->label << "] " << t->cmd << co(ansi::kReset) << "\n";
     out().flush();
     const TestRun r = Verify::run(*t,
                                   [](const QString& chunk) {
@@ -2004,7 +2178,8 @@ int cmdTest(const QStringList&) {
                                       out().flush();
                                   },
                                   CancelToken{});
-    out() << (r.green() ? "\n\033[32m✓ tests pass\033[0m\n" : "\n\033[31m✗ tests failed\033[0m\n");
+    out() << "\n" << co(r.green() ? ansi::kGreen : ansi::kRed)
+          << (r.green() ? "✓ tests pass" : "✗ tests failed") << co(ansi::kReset) << "\n";
     out().flush();
     return r.exit;
 }
@@ -2021,8 +2196,8 @@ int cmdVerify(const QStringList& args) {
     // by falling back to the process cwd — that is what confines its writes.
     Tools::setThreadRoot(QDir::currentPath());
 
-    out() << "\033[2m[" << t->label << "] " << t->cmd << "  (up to " << max
-          << " fix attempt(s))\033[0m\n";
+    out() << co(ansi::kDim) << "[" << t->label << "] " << t->cmd << "  (up to " << max
+          << " fix attempt(s))" << co(ansi::kReset) << "\n";
     out().flush();
 
     VerifyEvents ev;
@@ -2032,27 +2207,28 @@ int cmdVerify(const QStringList& args) {
     };
     ev.onAttempt = [max](int attempt, int, bool green) {
         if (green)
-            out() << "\n\033[32m✓ tests pass\033[0m"
+            out() << "\n" << co(ansi::kGreen) << "✓ tests pass" << co(ansi::kReset)
                   << (attempt > 1 ? QStringLiteral(" after %1 fix attempt(s)").arg(attempt - 1)
                                   : QString())
                   << "\n";
         else
-            out() << "\n\033[33m✗ attempt " << attempt << "/" << max << ": failing\033[0m\n";
+            out() << "\n" << co(ansi::kYellow) << "✗ attempt " << attempt << "/" << max << ": failing"
+                  << co(ansi::kReset) << "\n";
         out().flush();
     };
     ev.onFixStart = [] {
-        out() << "\033[2m  asking the agent to fix…\033[0m ";
+        out() << co(ansi::kDim) << "  asking the agent to fix…" << co(ansi::kReset) << " ";
         out().flush();
     };
     ev.onFixStep = [] {
-        out() << "\033[2m·\033[0m";
+        out() << co(ansi::kDim) << "·" << co(ansi::kReset);
         out().flush();
     };
 
     const int code = Verify::fixLoop(*t, max, backend, model, ev, CancelToken{});
     if (code != 0) {
-        err() << "\n\033[33mStill failing after " << max
-              << " attempt(s).\033[0m Review the changes before committing.\n";
+        err() << "\n" << ce(ansi::kYellow) << "Still failing after " << max << " attempt(s)."
+              << ce(ansi::kReset) << " Review the changes before committing.\n";
         err().flush();
     }
     return code;
@@ -2828,6 +3004,20 @@ int main(int argc, char** argv) {
     QStringList args = QCoreApplication::arguments();
     args.removeFirst();
 
+    // POSIX end-of-options. Everything after `--` is prompt text: never a
+    // subcommand, never a flag. This is the escape hatch for the two checks
+    // below — `ollamadev -- status` asks the model about status instead of
+    // running the `status`-ish command it resembles, and `ollamadev -- --json is
+    // wrong here` is a prompt rather than an unknown option. Quoting cannot do
+    // this job: the shell strips the quotes, so `ollamadev "status"` and
+    // `ollamadev status` arrive as the same argv.
+    QStringList forcedPrompt;
+    const int endOfOpts = args.indexOf(QStringLiteral("--"));
+    if (endOfOpts >= 0) {
+        forcedPrompt = args.mid(endOfOpts + 1);
+        args = args.mid(0, endOfOpts);
+    }
+
     if (hasFlag(args, "-h") || hasFlag(args, "--help")) {
         printHelp();
         return 0;
@@ -2838,9 +3028,22 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // Reject a mistyped flag before anything acts on the rest of the line. Done
+    // here, once, so it covers the REPL, a one-shot and every subcommand — the
+    // pass-through commands opt out inside checkFlags().
+    if (const int rc = checkFlags(positionals(args).value(0), args)) return rc;
+
     // Take the agent off the network for THIS run, whatever config says. Checked
     // when a network tool runs, so it applies to the REPL and the crew too.
     if (hasFlag(args, "--no-web")) WebSearch::setWebEnabled(false);
+
+    // `--` was given with something after it: that tail is the prompt, whatever it
+    // looks like. Flags BEFORE the `--` still apply, so `-m x -- fix the parser`
+    // works.
+    if (!forcedPrompt.isEmpty()) {
+        syncCurrentProject();
+        return cmdOneShot(forcedPrompt.join(' '), args);
+    }
 
     // Nothing to do but talk => the interactive REPL. "No args" also covers a bare
     // `ollamadev -m <model>` / `-c`: those select a model and a session, they are
@@ -3078,8 +3281,25 @@ int main(int argc, char** argv) {
         return cmdCrew(rest);
     }
 
+    // A lone word that is nearly a subcommand is a typo, not a prompt. `ollamadev
+    // comit` used to fall through to the model, which answered it as a question —
+    // a wasted call and a confusing one. A real prompt is several words, or a word
+    // no command resembles, and still goes through untouched.
+    const QStringList words = positionals(args);
+    if (words.size() == 1) {
+        const QString guess = nearest(words.first().toLower(), knownCommands());
+        if (!guess.isEmpty()) {
+            err() << "unknown command: " << words.first() << "\n"
+                  << "did you mean `ollamadev " << guess << "`?\n"
+                  << "to send it to the model as a prompt instead: ollamadev -- "
+                  << words.first() << "\n";
+            err().flush();
+            return 2;
+        }
+    }
+
     // Anything else is a prompt — the POSITIONAL words only. args.join(' ') would
     // splice the flags into the prompt itself, so `ollamadev -m qwen3.5:9b fix the
     // parser` asked the model to fix "-m qwen3.5:9b fix the parser".
-    return cmdOneShot(positionals(args).join(' '), args);
+    return cmdOneShot(words.join(' '), args);
 }

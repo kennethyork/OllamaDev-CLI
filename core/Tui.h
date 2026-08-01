@@ -51,6 +51,20 @@ public:
     static bool stdoutIsTty();
     static bool stdinIsTty();
 
+    // May we emit ANSI colour at all? False when the stream is redirected (a pipe
+    // or a file), when NO_COLOR is set, when TERM=dumb, or when ui.color=false.
+    // Every styled write outside the raw-mode line editor goes through this:
+    // `ollamadev diff | less` and `ollamadev commit >log` were dumping escape
+    // bytes into the pipe. The two streams are judged separately — redirecting
+    // one must not strip colour from the other.
+    static bool colorEnabled();     // stdout
+    static bool colorEnabledErr();  // stderr
+
+    // The escape when colour is on, "" when it is off — so a call site can stay a
+    // one-liner: out() << paint(ansi::kGreen) << "✓" << paint(ansi::kReset).
+    static const char* paint(const char* escape);
+    static const char* paintErr(const char* escape);
+
     // Display columns the string occupies once printed: ANSI escapes count for
     // nothing, emoji and CJK count 2. wcwidth() does the per-codepoint work (in
     // a UTF-8 locale, which we set ourselves — under LC_ALL=C glibc reports -1

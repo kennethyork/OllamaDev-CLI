@@ -39,7 +39,26 @@ ollamadev setup                 # detect hardware, recommend + pull a model
 ollamadev                       # interactive chat (auto-resumes this folder)
 ollamadev "add a --json flag to the export command"   # one-shot agent turn
 ollamadev doctor                # health check
+
+git diff | ollamadev "review this"    # piped stdin is appended to the prompt
+ollamadev -- status of the release    # `--` forces prompt text, not a command
 ```
+
+## How it behaves in a shell
+
+- **Working directory wins.** Every command acts on the folder you ran it in. If
+  that folder is a bookmarked workspace it is published as active so the desktop
+  app follows along, but the CLI never relocates itself. `ollamadev config set
+  workspace.follow true` opts back in to following the active project from
+  anywhere.
+- **Colour only for terminals.** ANSI styling is suppressed when the stream is a
+  pipe or a file, and honours `NO_COLOR`, `TERM=dumb` and `ui.color false`.
+  stdout and stderr are judged separately.
+- **Exit codes.** `0` success · `1` the command ran and reported a problem (no
+  index, a leaked secret, tests red) · `2` the command line itself was wrong.
+- **Nothing is ignored in silence.** An unrecognised flag or subcommand is an
+  error with a suggestion. Flags after `git`, `mcp` and `terminal` belong to the
+  program being wrapped and are passed straight through.
 
 ## What it does
 

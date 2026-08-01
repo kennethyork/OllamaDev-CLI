@@ -54,18 +54,18 @@ void emitRaw(const QString& s) {
     std::fflush(stdout);
 }
 
-QString dim(const QString& s) {
-    return QString::fromUtf8(ansi::kDim) + s + QString::fromUtf8(ansi::kReset);
+// Wrap in an escape only when the terminal will consume it. Piping the REPL, or
+// running it under NO_COLOR, used to spray escape bytes over the transcript —
+// the banner, the prompt and /help all went out coloured regardless.
+QString paint(const char* escape, const QString& s) {
+    if (!Tui::colorEnabled()) return s;
+    return QString::fromUtf8(escape) + s + QString::fromUtf8(ansi::kReset);
 }
-QString cyan(const QString& s) {
-    return QString::fromUtf8(ansi::kCyan) + s + QString::fromUtf8(ansi::kReset);
-}
-QString yellow(const QString& s) {
-    return QString::fromUtf8(ansi::kYellow) + s + QString::fromUtf8(ansi::kReset);
-}
-QString green(const QString& s) {
-    return QString::fromUtf8(ansi::kGreen) + s + QString::fromUtf8(ansi::kReset);
-}
+
+QString dim(const QString& s) { return paint(ansi::kDim, s); }
+QString cyan(const QString& s) { return paint(ansi::kCyan, s); }
+QString yellow(const QString& s) { return paint(ansi::kYellow, s); }
+QString green(const QString& s) { return paint(ansi::kGreen, s); }
 
 // ---------------------------------------------------------------------------
 // @file mentions (port of src/71-mentions.php)
@@ -282,7 +282,8 @@ QStringList Repl::installedModels() const {
 
 void Repl::banner() const {
     if (!qEnvironmentVariableIsEmpty("OLLAMADEV_NO_BANNER")) return;
-    emitRaw(QLatin1Char('\n') + cyan(QString::fromUtf8(ansi::kBold) + QString::fromUtf8(kBanner)) +
+    emitRaw(QLatin1Char('\n') +
+            cyan(QString::fromUtf8(Tui::paint(ansi::kBold)) + QString::fromUtf8(kBanner)) +
             QLatin1Char('\n'));
     emitRaw(dim(QStringLiteral("  OllamaDev ") + QStringLiteral(ODV_VERSION) +
                 QStringLiteral(" · local AI coding assistant")) +
@@ -740,8 +741,9 @@ QString Repl::cmdHelp() const {
     auto row = [](const QString& cmd, const QString& desc) {
         return QStringLiteral("  ") + cyan(cmd.leftJustified(22)) + dim(desc) + QLatin1Char('\n');
     };
-    QString o = QLatin1Char('\n') + QString::fromUtf8(ansi::kBold) + QStringLiteral("  Commands") +
-                QString::fromUtf8(ansi::kReset) + QStringLiteral("\n\n");
+    QString o = QLatin1Char('\n') + QString::fromUtf8(Tui::paint(ansi::kBold)) +
+                QStringLiteral("  Commands") + QString::fromUtf8(Tui::paint(ansi::kReset)) +
+                QStringLiteral("\n\n");
     o += dim(QStringLiteral("  Conversation")) + QLatin1Char('\n');
     o += row(QStringLiteral("/chat · /agent"), QStringLiteral("chat-only vs. tool-using mode"));
     o += row(QStringLiteral("/retry"), QStringLiteral("re-run the last turn"));
@@ -1052,7 +1054,7 @@ Repl::Slash Repl::slash(const QString& input) {
         history_.clear();
         out = green(QStringLiteral("  ✓ new session ")) + dim(session_.id()) + QLatin1Char('\n');
     } else if (cmd == QLatin1String("clear")) {
-        out = QString::fromUtf8(ansi::kClear);
+        out = QString::fromUtf8(Tui::paint(ansi::kClear));  // nothing to clear in a pipe
     } else if (cmd == QLatin1String("compact")) {
         const int keep = Config::integer(QStringLiteral("agents.compactKeep"), 8);
         const int before = session_.messages().size();

@@ -1109,9 +1109,27 @@ Crew::Result Crew::securityScan(const CrewOptions& opts, const CrewEvents& ev,
                 "the listed files for real vulnerabilities: injection, auth/authz gaps, unsafe "
                 "deserialization, path traversal, secrets, unsafe shell/exec, SSRF, memory safety. "
                 "Report ONLY concrete findings, each as `- <file>:<line> [severity] <issue> — <why>`. "
-                "If you find nothing real, say so. Do NOT invent issues.";
-            QString usr = "Focus" + (opts.focus.isEmpty() ? QString() : ": " + opts.focus) +
-                          "\n\nFiles to scan:\n" + buckets[g].join('\n');
+                "If you find nothing real, say so. Do NOT invent issues.\n"
+                "End your reply with a line on its own reading exactly `FINDINGS: <n>`, where <n> "
+                "is how many vulnerabilities you reported. Write `FINDINGS: 0` if there were none. "
+                "This line is parsed, so it must be present and must be last.";
+            // The instruction, then the file list. This used to open with a bare
+            // dangling "Focus" whenever --focus was absent — a word on its own
+            // line with nothing after it, which reads as a truncated instruction.
+            // Scanners answered it the way anyone would answer an unfinished
+            // sentence: by asking what was wanted. Only mention focus when there
+            // is one.
+            QString usr = QStringLiteral(
+                "Scan the files below and report every real vulnerability you can confirm by "
+                "reading them. Do not ask questions; there is nobody to answer. If a file is "
+                "clean, say so for that file.");
+            if (!opts.focus.isEmpty()) usr += "\n\nFocus on: " + opts.focus;
+            usr += "\n\nFiles to scan:\n" + buckets[g].join('\n');
+            // Repeated as the LAST thing read, not only in the system prompt.
+            // Stated once at the top it was dropped every time: scanners that had
+            // correctly found a SQL injection and a command injection still ended
+            // without the trailer, so the run could only report itself incomplete.
+            usr += "\n\nWhen you are done, finish with a line on its own:\nFINDINGS: <number>";
             if (!seeded.isEmpty())
                 usr += "\n\nRegex pre-scan signals (verify these, they are not proof):\n" +
                        seeded.left(4000);
@@ -1119,21 +1137,59 @@ Crew::Result Crew::securityScan(const CrewOptions& opts, const CrewEvents& ev,
                                       {"user", usr, {}, {}, {}, {}, {}}};
             const QString finding =
                 a.loop(msgs, Config::integer("crew.researchIterations", 6), {}, cancel);
-            // A scanner that turned up something concrete is "held" (needs your
-            // eyes); a clean area is "done".
-            const bool hit = finding.contains(QLatin1Char('[')) &&
-                             !finding.toLower().contains(QStringLiteral("no ")) &&
-                             !finding.trimmed().isEmpty();
-            scanners[g].state = hit ? "held" : "done";
+            // How many vulnerabilities this scanner is claiming. Read from the
+            // trailer it was told to write, because guessing from prose does not
+            // work: the previous test — "contains a '[' and does not contain
+            // 'no '" — read a report carrying a SQL injection AND a command
+            // injection as clean, purely because the model wrote them in a
+            // markdown table instead of the requested bullet form.
+            //
+            // -1 means the trailer is missing, which is NOT the same as zero. A
+            // scanner that did not answer in the agreed form has told us nothing,
+            // and an unanswered scan must never read as an all-clear.
+            int count = -1;
+            static const QRegularExpression trailer(
+                QStringLiteral("FINDINGS:\\s*(\\d+)"), QRegularExpression::CaseInsensitiveOption);
+            QRegularExpressionMatchIterator it = trailer.globalMatch(finding);
+            while (it.hasNext()) count = it.next().captured(1).toInt();  // the LAST one wins
+
+            scanners[g].state = count != 0 ? "held" : "done";
             if (ev.onCoderState) ev.onCoderState(g + 1, scanners[g].state);
             publishBoard(runId, boardTask, scanners, true);
-            return QJsonObject{{"g", g + 1}, {"text", finding}};
+            return QJsonObject{{"g", g + 1}, {"text", finding}, {"count", count}};
         });
 
     // Assemble the report.
     QString report = QStringLiteral("# Security scan — %1\n\n").arg(runId);
     if (seededCount)
         report += QStringLiteral("## Regex pre-scan (%1 signal(s))\n\n%2\n").arg(seededCount).arg(seeded);
+    // The headline goes at the TOP, before any prose. A reader who opens this
+    // file and skims must not be able to come away with the wrong impression of
+    // whether anything was found.
+    int found = 0, unanswered = 0;
+    for (const auto& r : reports) {
+        if (r.isEmpty()) continue;
+        const int c = r.value("count").toInt(-1);
+        if (c < 0) ++unanswered;
+        else found += c;
+    }
+    QString headline;
+    if (unanswered)
+        headline = QStringLiteral(
+                       "**%1 finding(s); %2 scanner(s) did not report in the agreed form.** "
+                       "Treat this scan as INCOMPLETE — an area nobody answered for is not a "
+                       "clean area.\n\n")
+                       .arg(found)
+                       .arg(unanswered);
+    else if (found)
+        headline = QStringLiteral("**%1 finding(s).** Read them below.\n\n").arg(found);
+    else
+        headline = QStringLiteral("**No findings.** %1 file(s) across %2 scanner(s).\n\n")
+                       .arg(sources.size())
+                       .arg(groups);
+    report.insert(report.indexOf(QLatin1Char('\n'), report.indexOf(QLatin1Char('\n')) + 1) + 1,
+                  QLatin1Char('\n') + headline);
+
     report += QStringLiteral("## Scanner findings\n\n");
     for (const auto& r : reports) {
         const QString t = r.value("text").toString().trimmed();
@@ -1146,9 +1202,21 @@ Crew::Result Crew::securityScan(const CrewOptions& opts, const CrewEvents& ev,
     writeFile(path, report);
     publishBoard(runId, boardTask, scanners, false);  // scan finished — board goes idle
     if (ev.onLog) ev.onLog(QStringLiteral("report written: %1").arg(path));
-    phase("done", QStringLiteral("scanned %1 files across %2 scanners")
-                      .arg(sources.size())
-                      .arg(groups));
+    // Say what was FOUND, not merely what was read. "scanned 2 files across 2
+    // scanners" was the whole summary, so a run that turned up a SQL injection
+    // and a command injection ended on a line indistinguishable from a clean one.
+    QString done = QStringLiteral("scanned %1 files across %2 scanners — ")
+                       .arg(sources.size())
+                       .arg(groups);
+    if (unanswered)
+        done += QStringLiteral("%1 finding(s), %2 scanner(s) UNANSWERED (scan incomplete)")
+                    .arg(found)
+                    .arg(unanswered);
+    else if (found)
+        done += QStringLiteral("%1 FINDING(S) — see the report").arg(found);
+    else
+        done += QStringLiteral("no findings");
+    phase("done", done);
     return out;
 }
 

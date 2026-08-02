@@ -657,9 +657,19 @@ Crew::Result Crew::run(const CrewOptions& opts, const CrewEvents& ev, const Canc
 
             // Thread-local, NOT QDir::setCurrent — cwd is process-wide and
             // parallel coders would stomp each other into the wrong sandbox.
+            //
+            // Restored on the way out, because the pool may run a task INLINE on
+            // the calling thread: with one coder it usually does, and the main
+            // thread was then left rooted in a sandbox for the rest of the run.
+            // Everything project-scoped that came after inherited it — the learn
+            // phase wrote its memory notes into `<sandbox>/.ollamadev/memory`,
+            // which is deleted moments later. It reported "learned: 3 fact(s)"
+            // every time and never kept one.
+            const QString priorRoot = Tools::hasThreadRoot() ? Tools::threadRoot() : QString();
             Tools::setThreadRoot(sandboxes[i]);
             const QString finalText = a.loop(msgs, Config::integer("crew.coderIterations", 10),
                                              sink, cancel, drainSteer);
+            Tools::setThreadRoot(priorRoot);
 
             // A CLI backend streams nothing through the sink (it is a subprocess
             // running its own loop), so without this its log would be empty and a
@@ -943,6 +953,10 @@ Crew::Result Crew::run(const CrewOptions& opts, const CrewEvents& ev, const Canc
     // produced something with a reusable shape — a skill. Next run loads both.
     if (doLearn && !cancel.cancelled()) {
         phase("learn", "distilling what this run taught");
+        // Memory is project-scoped, so say WHICH project rather than inheriting
+        // whatever root this thread was last given. The sandboxes are already
+        // destroyed by now; being rooted in one writes the notes into nothing.
+        Tools::setThreadRoot(projectRoot);
         QString summary = "Task: " + task + "\n\n";
         for (int i = 0; i < results.size(); ++i) {
             const CoderResult& r = results[i];

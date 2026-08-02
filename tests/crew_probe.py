@@ -17,13 +17,28 @@ catch, each reporting success while producing nothing:
 Each check below fails if its bug returns. Everything runs in a throwaway HOME
 and a throwaway git repo, so it never touches your sessions, board or memory.
 
-    python3 tests/crew_probe.py ./build/cli/ollamadev [--model M] [--only NAME]
+    python3 tests/crew_probe.py ./build/cli/ollamadev [--backend B] [--model M] [--only NAME]
 
 --only takes a comma-separated list: security, learn, dedupe, dedupe-negative,
 route, board. Use it — this is EXPENSIVE. A full pass runs six crews, each
 fanning out parallel coders, and will keep a laptop's fans up for several
 minutes. `--only route` costs a second or two; `--only learn` took 143s here.
-Pass `--model` a small local model to keep it cheap.
+
+Where the work happens is yours to choose, and both are first-class:
+
+  (nothing)                     your configured default — local Ollama unless
+                                you have changed it
+  --model qwen3.5:2b            a small LOCAL model: cheapest in money, and the
+                                one that keeps everything on your machine
+  --model gpt-oss:20b-cloud     Ollama's cloud tags: inference runs off-box, but
+                                sandboxes, git and the coder processes are still
+                                local, so this does NOT make the run free here
+  --backend claude              a different provider entirely, for every role
+
+--backend sets the session backend, which every role falls back to, so it is
+what stops a director or auditor quietly landing somewhere else. Note that
+`route` ignores both: choosing the model IS its job, and it will reach for a
+local one regardless.
 
 Exercised so far: route (3 checks), security (7), learn (5). The dedupe,
 dedupe-negative and board sections are written but have not yet been run
@@ -60,9 +75,10 @@ def check(ok, label, extra=""):
 class Env:
     """A throwaway HOME plus a throwaway git repo to run in."""
 
-    def __init__(self, binary, model):
+    def __init__(self, binary, model, backend=""):
         self.binary = os.path.abspath(binary)
         self.model = model
+        self.backend = backend
         self.home = tempfile.mkdtemp(prefix="odv-crew-home-")
         self.state = os.path.join(self.home, "state")
         self.work = tempfile.mkdtemp(prefix="odv-crew-work-")
@@ -91,8 +107,17 @@ class Env:
     def run(self, *args, timeout=1800):
         env = dict(os.environ, HOME=self.home, OLLAMADEV_HOME=self.state, NO_COLOR="1")
         argv = [self.binary, *args]
-        if self.model:
-            argv += ["-m", self.model]
+        # Only the commands that actually run a model take these. Bolting them
+        # onto `board` or `memory list` would be accepted and silently ignored,
+        # which is the sort of thing that later reads as evidence they applied.
+        if args and args[0] in ("crew", "route"):
+            if self.model:
+                argv += ["-m", self.model]
+            # One --backend covers every role: the crew falls back to the session
+            # backend for any role that does not name its own, so this is what
+            # stops a director or auditor quietly landing on a different one.
+            if self.backend:
+                argv += ["--backend", self.backend]
         try:
             p = subprocess.run(argv, cwd=self.work, env=env, timeout=timeout,
                                stdin=subprocess.DEVNULL, capture_output=True)
@@ -268,6 +293,10 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("binary")
     ap.add_argument("--model", default="", help="model to run every role on")
+    ap.add_argument("--backend", default="",
+                    help="backend for every role (ollama, claude, codex, gemini, …). "
+                         "Omit to use your configured default, which is local Ollama "
+                         "unless you have changed it.")
     ap.add_argument("--only", default="", help="comma-separated: " + ", ".join(PROBES))
     args = ap.parse_args()
 
@@ -277,9 +306,10 @@ def main():
         print(f"unknown probe(s): {', '.join(unknown)}", file=sys.stderr)
         return 2
 
-    e = Env(args.binary, args.model)
-    print(f"crew probe — binary {e.binary}\n           model {args.model or '(default)'}"
-          f"\n           work  {e.work}\n")
+    e = Env(args.binary, args.model, args.backend)
+    print(f"crew probe — binary  {e.binary}\n           backend {args.backend or '(configured default)'}"
+          f"\n           model   {args.model or '(configured default)'}"
+          f"\n           work    {e.work}\n")
     try:
         for name in wanted:
             print(f"[{name}]")

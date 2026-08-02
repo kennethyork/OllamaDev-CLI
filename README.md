@@ -159,7 +159,18 @@ python3 tests/fuzz_argv.py ./build-asan/cli/ollamadev 250 <seed>
 # Drive the language server over stdio: handshake, hover, go-to-def,
 # completion, clean shutdown. Needs no editor.
 python3 tests/lsp_probe.py ./build/cli/ollamadev
+
+# The crew's opt-in brains, end to end against a live model. EXPENSIVE — a full
+# pass runs six crews with parallel coders; use --only, and a small --model.
+python3 tests/crew_probe.py ./build/cli/ollamadev --only route
+python3 tests/crew_probe.py ./build/cli/ollamadev --only security,learn,dedupe
 ```
+
+The crew probe exists because three brains shipped broken in the same way —
+each reported success while producing nothing (`--security` wrote a report with
+no analysis, `--learn` wrote memory into a doomed sandbox, `--dedupe` judged
+duplication from filenames). None of that is reachable from `odv-tests`, which
+must stay offline and instant, so it lives here instead.
 
 The suite enumerates commands from `ollamadev help` rather than a list of its
 own, so the per-command invariants — help exists, `help X` == `X --help`, global

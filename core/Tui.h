@@ -60,6 +60,13 @@ public:
     static bool colorEnabled();     // stdout
     static bool colorEnabledErr();  // stderr
 
+    // --no-color / --color on the command line. A flag is what a script reaches
+    // for, and it outranks every other signal in both directions: forcing colour
+    // on is the point of --color, so it also overrides the not-a-tty test for
+    // pipes that do render escapes (less -R, CI logs). Unset by default, leaving
+    // the environment and config in charge.
+    static void setColorOverride(bool on);
+
     // The escape when colour is on, "" when it is off — so a call site can stay a
     // one-liner: out() << paint(ansi::kGreen) << "✓" << paint(ansi::kReset).
     static const char* paint(const char* escape);

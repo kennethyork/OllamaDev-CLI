@@ -22,7 +22,7 @@ Needs a C++20 compiler, CMake ≥ 3.21, and Qt6 (Core/Network/Concurrent).
 # or, manually:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
-./build/tests/odv-tests   # 200 assertions
+./build/tests/odv-tests   # 257 assertions
 ./build/cli/ollamadev --version
 ```
 
@@ -39,6 +39,9 @@ ollamadev setup                 # detect hardware, recommend + pull a model
 ollamadev                       # interactive chat (auto-resumes this folder)
 ollamadev "add a --json flag to the export command"   # one-shot agent turn
 ollamadev doctor                # health check
+
+ollamadev help                  # every command, one line each
+ollamadev help crew             # …or just one, in full (same as `crew --help`)
 
 git diff | ollamadev "review this"    # piped stdin is appended to the prompt
 ollamadev -- status of the release    # `--` forces prompt text, not a command
@@ -59,6 +62,11 @@ ollamadev -- status of the release    # `--` forces prompt text, not a command
 - **Nothing is ignored in silence.** An unrecognised flag or subcommand is an
   error with a suggestion. Flags after `git`, `mcp` and `terminal` belong to the
   program being wrapped and are passed straight through.
+- **Help is local and specific.** `ollamadev help` lists every command,
+  `ollamadev help <cmd>` (or `<cmd> --help`) documents just that one. No model
+  call is involved, so it works offline and costs nothing.
+- **Colour on demand.** `--no-color` and `--color` outrank the environment;
+  `--color` forces styling back on for pipes that render it, like `less -R`.
 
 ## What it does
 

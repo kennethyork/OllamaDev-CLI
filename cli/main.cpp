@@ -148,18 +148,190 @@ QStringList positionals(const QStringList& a) {
 // question. Both are now errors with a suggestion.
 // ---------------------------------------------------------------------------
 
-// Every subcommand main() dispatches on, in the order the help lists them.
-const QStringList& knownCommands() {
-    static const QStringList v{
-        "acp",       "agents",   "backends", "board",    "chat",     "code-search",
-        "commands",  "commit",   "completion", "config",  "context",  "crew",
-        "diff",      "doctor",   "eval",     "export",   "git",      "hooks",
-        "import",    "index",    "load",     "lsp",      "mcp",      "memory",
-        "models",    "plugin",   "plugins",  "pr",       "pull",     "resume",
-        "route",     "scan",     "search",   "setup",    "ship",     "skills",
-        "stats",     "terminal", "test",     "tidy",     "update",   "upgrade",
-        "verify",    "watch",    "workspace", "ws"};
+// One row per subcommand main() dispatches on. Everything downstream reads this
+// table — the typo checker, the shell completions, `help <cmd>` and `<cmd>
+// --help` — so a command added here is complete-able and documented at once. It
+// used to be three hand-kept lists, and they had drifted: twelve real commands
+// were missing from the completions.
+//
+// `blurb` is the one line the completions and `ollamadev help` show. `detail` is
+// the body of `ollamadev help <cmd>`; an empty detail means the blurb already
+// says everything and the synopsis line is enough.
+struct CommandDoc {
+    const char* name;
+    const char* args;   // the argument sketch shown after the command name
+    const char* blurb;  // one line, no trailing stop
+    const char* detail;
+};
+
+const QVector<CommandDoc>& commandDocs() {
+    static const QVector<CommandDoc> v{
+        {"acp", "", "serve the Agent Client Protocol on stdio",
+         "For editors that speak ACP. Owns stdin/stdout; anything after `acp` is\n"
+         "passed through untouched."},
+        {"agents", "[show <name>]", "file-defined subagent personas",
+         "Reads .ollamadev/agents/*.md. With no argument, lists them."},
+        {"backends", "", "which providers are installed and how wide they run", ""},
+        {"board", "", "pending crew decisions waiting on you",
+         "Changesets held for review. Apply one with `crew accept <n>`, drop it\n"
+         "with `crew discard <n>`."},
+        {"chat", "[\"<prompt>\"]", "tool-free conversation — no file edits",
+         "  chat \"<prompt>\"   one turn\n"
+         "  chat list         saved threads\n"
+         "  chat delete <id>  remove one\n\n"
+         "Chat mode has no tools, so it cannot touch your files. Use the bare\n"
+         "`ollamadev` REPL when you want the agent to act."},
+        {"code-search", "\"<query>\"", "search the repo by meaning",
+         "Needs an index: run `ollamadev index build` first."},
+        {"commands", "", "your own /slash commands (prompt templates)",
+         "  commands              list them\n"
+         "  /<name> [args]        run one as a single turn"},
+        {"commit", "[-a] [-m \"<msg>\"]", "AI commit message; a leaked secret BLOCKS it",
+         "  -a          stage every tracked change first\n"
+         "  -m <msg>    your own message, skipping the model\n"
+         "  --force     commit anyway when the secret scan objects\n\n"
+         "Runs on `git.model` if you set one, so commit messages can use a\n"
+         "smaller model than chat."},
+        {"completion", "bash|zsh|fish", "print a sourceable completion script",
+         "  ollamadev completion bash >> ~/.bashrc\n"
+         "  ollamadev completion zsh  > ~/.zfunc/_ollamadev\n"
+         "  ollamadev completion fish > ~/.config/fish/completions/ollamadev.fish"},
+        {"config", "get <key> | set <key> <value>", "read or write a dotted config key",
+         "Writes land in ade-prefs.json, never config.json.\n\n"
+         "  ui.color false           never emit ANSI colour\n"
+         "  workspace.follow true    follow the active project instead of the cwd\n"
+         "  git.model <name>         a smaller model for commit messages"},
+        {"context", "", "suggest num_ctx from free RAM/VRAM", ""},
+        {"crew", "\"<task>\"", "the parallel bench: research → plan → N coders → audit → land",
+         "  crew \"<task>\"          run it\n"
+         "  crew accept <n>        apply held work into your folder\n"
+         "  crew discard <n>       throw held work away\n"
+         "  crew steer <n> \"…\"     talk to a running coder (0 = the whole crew)\n"
+         "  crew resume [id]       finish an interrupted run (--replay to skip re-planning)\n"
+         "  crew role | pack       personas the Director assigns · saved crew configs\n"
+         "  crew clear             empty the board\n\n"
+         "Sizing:\n"
+         "  --max N                coders (default 4)\n"
+         "  --parallel N           cap concurrency (default: the backend's real limit)\n"
+         "  --focus \"<text>\"       steer the whole run\n"
+         "  --review               hold everything for review instead of auto-applying\n"
+         "  --no-research, --no-audit\n\n"
+         "Brains — all opt-in; plain crew is unchanged:\n"
+         "  --route                auto-pick each role's model by difficulty\n"
+         "  --debate               advocate/skeptic/judge vote per changeset\n"
+         "  --dedupe               hold coders whose work duplicates another's\n"
+         "  --security             read-only vulnerability scan → a report\n"
+         "  --swarm N              raise the coder cap for a bigger fan-out\n"
+         "  --amplify N            N Director plans (keep the modal one) + an\n"
+         "                         N-reviewer audit panel — majority rules\n"
+         "  --learn                remember what this run teaches, for the next one\n"
+         "  --pack <name>          start from a saved team; your flags still win\n\n"
+         "Per-role models. A model tag belongs to one backend, so these are positional:\n"
+         "  --coder-backends ollama,claude,codex --coder-models qwen3.5:9b,,\n"
+         "  (coder 1 on qwen; coders 2 and 3 on their own backend's default)\n"
+         "  --director-backend/-model, --auditor-backend/-model, --researcher-backend/-model"},
+        {"diff", "[--json]", "the working-tree diff, for review", ""},
+        {"doctor", "", "health check", ""},
+        {"eval", "", "fixed task suite → a pass rate you can compare",
+         "  --only <task>     run one task\n"
+         "  --compare a,b,c   score several models\n"
+         "  --json            machine-readable\n"
+         "  --min N           exit 1 below N%, so CI can gate on it\n"
+         "  --keep            leave the working dirs behind for inspection\n\n"
+         "Every task runs isolated in its own temp dir and the verdict is\n"
+         "deterministic — expected file content, or a command's exit code — never\n"
+         "a model judging another model.\n\n"
+         "Your own tasks join the suite: drop *.json into ./evals or\n"
+         "./.ollamadev/evals. check.type is file_exists, file_contains or command."},
+        {"export", "[<id>] [--all] [--out <file>]", "write sessions out as JSON",
+         "With no id, exports the most recent session."},
+        {"git", "<sub> [args…]", "git porcelain — status, diff, log, branch, checkout, …",
+         "  status diff log branch checkout add commit push pull stash show\n\n"
+         "Everything after the subcommand is git's own argv and is forwarded\n"
+         "untouched, so `ollamadev git log --oneline -5` works and\n"
+         "`ollamadev git --help` is git's help, not this one."},
+        {"hooks", "", "shell hooks on tool/session events (list/add/remove)",
+         "PreToolUse BLOCKS the tool on a non-zero exit. Hooks are read from your\n"
+         "HOME config only, never from a repo — a cloned project cannot run code\n"
+         "on your machine by shipping a hook."},
+        {"import", "<file.json>", "read a session back in from JSON", ""},
+        {"index", "build | status | clear", "semantic code index for code-search", ""},
+        {"load", "<id>", "resume a specific session", ""},
+        {"lsp", "[--port N]", "language server — completion, hover, go-to-def, diagnostics",
+         "Real diagnostics via php -l, py_compile, go vet, gcc, rustc. stdio by\n"
+         "default; --port serves TCP instead."},
+        {"mcp", "serve | list | add <name> <cmd…> | remove <name>",
+         "expose these tools to any MCP client, or call someone else's",
+         "  mcp serve [--allow-writes]   speak MCP on stdio\n"
+         "  mcp list                     servers this agent can call\n"
+         "  mcp add <name> <command> [args…]\n"
+         "  mcp remove <name>\n\n"
+         "The tail of `mcp add` is the server's own argv and is forwarded untouched."},
+        {"memory", "", "wiki-linked notes (list/new/show/search/graph/rm)",
+         "  memory new \"<title>\" [\"<body>\"] [--tags a,b]\n"
+         "  memory list | show <id> | search \"<q>\" | graph | rm <id>"},
+        {"models", "[presets|cloud|chain] [--json]", "list models on the active backend", ""},
+        {"plugin", "list | install <dir|url> | enable <name> | disable <name>",
+         "manage plugins", "`plugins` is the same command."},
+        {"plugins", "", "alias for `plugin`", ""},
+        {"pr", "create | review <n>", "draft a PR · review one with the model",
+         "  pr create [--base <branch>]\n"
+         "  pr review <n> [--comment]    --comment posts the review to the PR\n\n"
+         "Needs the `gh` CLI, authenticated."},
+        {"pull", "<model>", "download a model (resumable)", ""},
+        {"resume", "", "pick a recent session to resume", ""},
+        {"route", "[--run] \"<task>\"", "show — or run — which model the brain picks", ""},
+        {"scan", "[path]", "secret scanner; exit 1 on a high finding", ""},
+        {"search", "\"<query>\"", "web search", ""},
+        {"setup", "", "detect hardware, recommend + pull a model", ""},
+        {"ship", "[--yes]", "stage → scan → AI commit → ask, then push",
+         "  --yes     auto-answer the prompts\n"
+         "  --force   push anyway when the secret scan objects\n\n"
+         "--yes only skips the questions. It does not overrule a leaked\n"
+         "credential — that still takes --force, deliberately."},
+        {"skills", "", "progressive-disclosure skills (list/add/new/show/search/export/rm)",
+         "  skills add <name|dir|git-url|archive> [--force]\n"
+         "  skills new <name>"},
+        {"stats", "", "token usage this project", ""},
+        {"terminal", "<sub> <name> [args…]", "named, long-lived ptys shared with the desktop app",
+         "  terminal create <name>          a pty that outlives this command\n"
+         "  terminal spawn <name> <cmd…>    the same, running one command\n"
+         "  terminal attach <name>          your tty in, its output out (Ctrl-] detaches)\n"
+         "  terminal send <name> \"<text>\"\n"
+         "  terminal broadcast \"<text>\"\n"
+         "  terminal list | start | stop | delete | log <name>\n\n"
+         "The tail of `spawn` is the program's own argv and is forwarded untouched."},
+        {"test", "", "detect and run this project's tests", ""},
+        {"tidy", "[N]", "an AI rebase plan for the last N commits (default 10)", ""},
+        {"update", "", "check for a newer release and install it",
+         "`upgrade` is the same command."},
+        {"upgrade", "", "alias for `update`", ""},
+        {"verify", "[--max N]", "run the tests, and let the agent fix failures until green", ""},
+        {"watch", "\"<task>\" [paths…]", "re-run a task whenever files change",
+         "  --interval N   debounce, in seconds\n"
+         "  --once         run now, then exit"},
+        {"workspace", "", "alias for `ws`", ""},
+        {"ws", "list | add [path] [name] | rm <name> | open <name>",
+         "bookmarked project folders", "`workspace` is the same command."},
+    };
     return v;
+}
+
+// Every subcommand main() dispatches on, derived from the table above so the two
+// cannot disagree.
+const QStringList& knownCommands() {
+    static const QStringList v = [] {
+        QStringList out;
+        for (const CommandDoc& d : commandDocs()) out << QString::fromLatin1(d.name);
+        return out;
+    }();
+    return v;
+}
+
+const CommandDoc* findCommandDoc(const QString& name) {
+    for (const CommandDoc& d : commandDocs())
+        if (name == QLatin1String(d.name)) return &d;
+    return nullptr;
 }
 
 // Every flag the CLI reads for itself. Flags we merely forward to another
@@ -169,12 +341,12 @@ const QStringList& knownFlags() {
     static const QStringList v = [] {
         QStringList f{
             "-a",          "-c",           "-h",          "-m",          "-n",
-            "-v",          "--all",        "--allow-writes", "--comment", "--continue",
-            "--debate",    "--dedupe",     "--dry-run",   "--force",     "--help",
-            "--install",   "--json",       "--keep",      "--learn",     "--new",
-            "--no-audit",  "--no-research", "--no-web",   "--once",      "--readonly",
-            "--replay",    "--review",     "--route",     "--run",       "--security",
-            "--version",   "--yes"};
+            "-v",          "-V",           "--all",       "--allow-writes", "--color",
+            "--comment",   "--continue",   "--debate",    "--dedupe",    "--dry-run",
+            "--force",     "--help",       "--install",   "--json",      "--keep",
+            "--learn",     "--new",        "--no-audit",  "--no-color",  "--no-research",
+            "--no-web",    "--once",       "--readonly",  "--replay",    "--review",
+            "--route",     "--run",        "--security",  "--version",   "--yes"};
         // Anything that takes a value is a flag too; keeping one list avoids the
         // two drifting apart.
         f += flagsTakingValue();
@@ -412,8 +584,52 @@ void printHelp() {
           << "  --focus \"<text>\"\n\n"
           << "A model tag belongs to one backend, so the --coder-* lists are positional:\n"
           << "  --coder-backends ollama,claude,codex --coder-models qwen3.5:9b,,\n"
-          << "  (coder 1 on qwen; coders 2 and 3 on their own backend's default)\n";
+          << "  (coder 1 on qwen; coders 2 and 3 on their own backend's default)\n\n"
+          << "  ollamadev help <command>     what one command takes, on its own\n";
     out().flush();
+}
+
+// `ollamadev help <cmd>` and `ollamadev <cmd> --help`. Both land here rather than
+// dumping the whole 120-line surface at someone who asked about one command.
+int printCommandHelp(const QString& name) {
+    const CommandDoc* d = findCommandDoc(name);
+    if (!d) {
+        err() << "unknown command: " << name << "\n";
+        const QString guess = nearest(name.toLower(), knownCommands());
+        if (!guess.isEmpty()) err() << "did you mean `ollamadev help " << guess << "`?\n";
+        else err() << "run `ollamadev help` for the full list.\n";
+        // `help` swallows its argument, so say how to ask the model instead — the
+        // same escape hatch the unknown-command path offers.
+        err() << "to ask the model about it instead: ollamadev -- help " << name << "\n";
+        err().flush();
+        return 2;
+    }
+    const QString args = QString::fromUtf8(d->args);
+    out() << "Usage: " << co(ansi::kBold) << "ollamadev " << d->name << co(ansi::kReset)
+          << (args.isEmpty() ? "" : " ") << args << "\n\n"
+          << "  " << d->blurb << "\n";
+    const QString detail = QString::fromUtf8(d->detail);
+    if (!detail.isEmpty()) out() << "\n" << detail << "\n";
+    out().flush();
+    return 0;
+}
+
+// The bare `help` listing: every command with its one-liner. `--help` keeps the
+// grouped, narrative form; this one is the flat index you scan for a name.
+int printCommandIndex() {
+    out() << "OllamaDev " << ODV_VERSION << "\n\n"
+          << "Usage: ollamadev [command] [options]\n"
+          << "       ollamadev help <command>\n\n";
+    int width = 0;
+    for (const CommandDoc& d : commandDocs())
+        width = qMax(width, int(qstrlen(d.name)));
+    for (const CommandDoc& d : commandDocs())
+        out() << "  " << co(ansi::kBold)
+              << QString::fromUtf8(d.name).leftJustified(width) << co(ansi::kReset) << "  "
+              << d.blurb << "\n";
+    out() << "\nRun `ollamadev --help` for the grouped overview.\n";
+    out().flush();
+    return 0;
 }
 
 int cmdBackends() {
@@ -2888,16 +3104,25 @@ int cmdChat(const QStringList& args) {
 
 // --------------------------------------------------------------- completion
 
+// Blurbs are prose and several carry an apostrophe ("someone else's"). They get
+// embedded in single-quoted zsh and fish literals, where an unescaped one ends
+// the string and leaves the script a syntax error.
+QString shellQuote(const QString& s) {
+    QString q = s;
+    q.replace(QLatin1String("'"), QLatin1String("'\\''"));
+    return q;
+}
+
 int cmdCompletion(const QStringList& args) {
     const QString shell = args.value(0, QStringLiteral("bash"));
 
-    // The top-level verbs the CLI dispatches, kept here so the completion offers the
-    // same set the code actually handles.
-    static const char* kTopLevel =
-        "chat models backends doctor crew board index code-search search skills memory "
-        "config completion load resume pull setup context stats diff commit ship pr git "
-        "test verify watch terminal hooks commands mcp scan lsp eval "
-        "help --help --version --backend --model --continue --resume --new -h -v -m -c";
+    // Read straight off the command table, so a command added there is completable
+    // without touching this. The hand-kept list this replaced had drifted twelve
+    // commands behind the dispatch.
+    const QString kTopLevel =
+        knownCommands().join(' ') +
+        QStringLiteral(" help --help --version --no-color --color --backend --model "
+                       "--continue --resume --new -h -v -m -c");
 
     if (shell == "bash") {
         out() << "# OllamaDev bash completion — install: ollamadev completion bash >> ~/.bashrc\n"
@@ -2947,22 +3172,11 @@ int cmdCompletion(const QStringList& args) {
         out() << "#compdef ollamadev\n"
                  "_ollamadev() {\n"
                  "    local -a commands\n"
-                 "    commands=(\n"
-                 "        'chat:Tool-free chat thread'\n"
-                 "        'models:List models (presets, cloud, chain)'\n"
-                 "        'backends:Show installed providers'\n"
-                 "        'crew:Run the parallel agent bench'\n"
-                 "        'board:Pending decisions'\n"
-                 "        'config:Get or set a config key'\n"
-                 "        'load:Resume a specific session'\n"
-                 "        'resume:Pick a recent session to resume'\n"
-                 "        'pull:Download a model from Ollama'\n"
-                 "        'git:Git porcelain'\n"
-                 "        'lsp:Language server for IDEs'\n"
-                 "        'eval:Measure the agent pass rate'\n"
-                 "        'diff:Working-tree diff'\n"
-                 "        'ship:Stage, scan, commit, push'\n"
-                 "        'help:Show help'\n"
+                 "    commands=(\n";
+        for (const CommandDoc& d : commandDocs())
+            out() << "        '" << d.name << ":" << shellQuote(QString::fromUtf8(d.blurb))
+                  << "'\n";
+        out() << "        'help:Show help for a command'\n"
                  "    )\n"
                  "    _describe 'command' commands\n"
                  "}\n"
@@ -2972,9 +3186,12 @@ int cmdCompletion(const QStringList& args) {
     }
 
     if (shell == "fish") {
-        out() << "# OllamaDev fish completion\n"
-                 "complete -c ollamadev -n '__fish_use_subcommand' -a 'chat models backends doctor "
-                 "crew board config load resume pull git lsp eval diff commit ship pr' -d 'Command'\n"
+        out() << "# OllamaDev fish completion\n";
+        for (const CommandDoc& d : commandDocs())
+            out() << "complete -c ollamadev -n '__fish_use_subcommand' -a '" << d.name << "' -d '"
+                  << shellQuote(QString::fromUtf8(d.blurb)) << "'\n";
+        out() << "complete -c ollamadev -n '__fish_use_subcommand' -a 'help' -d 'Show help for a "
+                 "command'\n"
                  "complete -c ollamadev -n '__fish_seen_subcommand_from models' -a 'presets cloud "
                  "chain' -d 'Models subcommand'\n"
                  "complete -c ollamadev -n '__fish_seen_subcommand_from config' -a 'get set' -d "
@@ -3018,11 +3235,40 @@ int main(int argc, char** argv) {
         args = args.mid(0, endOfOpts);
     }
 
-    if (hasFlag(args, "-h") || hasFlag(args, "--help")) {
-        printHelp();
-        return 0;
+    // Colour is otherwise only controllable by environment (NO_COLOR, TERM) or
+    // config. A flag is what a script reaches for, and --color forces it back on
+    // when the output is a pipe that does understand escapes (less -R, CI logs).
+    // First, so that everything below — help included — is painted accordingly.
+    if (hasFlag(args, "--no-color")) Tui::setColorOverride(false);
+    else if (hasFlag(args, "--color")) Tui::setColorOverride(true);
+
+    // `help` is a command, not a prompt. It used to be neither: it fell through to
+    // cmdOneShot, so the single most universal thing anyone types at an unfamiliar
+    // CLI spent a model call being answered as a question ("Sure! What do you need
+    // help with?"). Read off the positionals, not args.first(), so a flag may
+    // precede it — `ollamadev --no-color help` is a reasonable thing to type.
+    const QStringList helpWords = positionals(args);
+    if (helpWords.value(0) == QLatin1String("help")) {
+        const QString topic = helpWords.value(1);
+        return topic.isEmpty() ? printCommandIndex() : printCommandHelp(topic);
     }
-    if (hasFlag(args, "-v") || hasFlag(args, "--version")) {
+
+    const QString firstWord = helpWords.value(0);
+    if (hasFlag(args, "-h") || hasFlag(args, "--help")) {
+        // A bare `ollamadev git --help` is a question about our wrapper, so answer
+        // it. Once a subcommand is present the line belongs to the program being
+        // wrapped — `git log --help` is git's own help — so fall through to the
+        // dispatch and let it forward.
+        const bool bare = args.size() == 1 || (args.size() == 2 && args.first() == firstWord);
+        if (!forwardsUnknownArgs(firstWord) || bare) {
+            // Asked about one command, answer about that command rather than
+            // reciting the whole surface at them.
+            if (findCommandDoc(firstWord)) return printCommandHelp(firstWord);
+            printHelp();
+            return 0;
+        }
+    }
+    if (hasFlag(args, "-v") || hasFlag(args, "-V") || hasFlag(args, "--version")) {
         out() << "OllamaDev " << ODV_VERSION << "\n";
         out().flush();
         return 0;

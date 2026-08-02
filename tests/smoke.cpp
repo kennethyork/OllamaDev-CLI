@@ -1465,6 +1465,119 @@ static void testCliArgChecking() {
           "--help documents `--` as the way to force prompt text");
 }
 
+// `help` is the first thing anyone types at a CLI they do not know. It used to be
+// the one word that was neither a command nor a flag, so it fell through to the
+// model and came back "Sure! What do you need help with?" — a wasted call, and a
+// bewildering answer. None of these may touch the network.
+static void testHelpIsACommand() {
+    const CliRun index = runCli({"help"});
+    check(index.code == 0, "`help` exits 0");
+    check(index.out.contains(QStringLiteral("Usage: ollamadev")),
+          "`help` prints usage rather than asking a model what you meant");
+    check(!index.out.contains(QStringLiteral("What do you need help with")),
+          "…and is answered locally, never by the model");
+
+    // The index is the flat list you scan for a name, so every command must be on
+    // it — including the ones the grouped --help text never mentions.
+    for (const char* name : {"crew", "eval", "tidy", "acp", "ws", "plugin"})
+        check(index.out.contains(QLatin1String(name)),
+              QByteArray("`help` lists ") + name);
+
+    // Asked about one command, answer about that command.
+    const CliRun crew = runCli({"help", "crew"});
+    check(crew.code == 0 && crew.out.contains(QStringLiteral("Usage: ollamadev crew")),
+          "`help <cmd>` prints that command's usage");
+    check(crew.out.contains(QStringLiteral("--amplify")),
+          "…including its own flags, which the global help crowds out");
+    check(!crew.out.contains(QStringLiteral("ollamadev doctor")),
+          "…and not the whole command surface");
+
+    // The two spellings are the same question and must give the same answer.
+    const CliRun flag = runCli({"crew", "--help"});
+    check(flag.code == 0 && flag.out == crew.out, "`<cmd> --help` == `help <cmd>`");
+
+    const CliRun dashH = runCli({"commit", "-h"});
+    check(dashH.code == 0 && dashH.out.contains(QStringLiteral("Usage: ollamadev commit")),
+          "-h is per-command too");
+
+    // A bare --help is still the grouped overview, not one command's page.
+    const CliRun global = runCli({"--help"});
+    check(global.out.contains(QStringLiteral("Crew — the parallel bench")),
+          "a bare --help is still the full overview");
+
+    // An unknown topic is a mistake, not a prompt.
+    const CliRun bad = runCli({"help", "comit"});
+    check(bad.code == 2, "`help <typo>` exits 2");
+    check(bad.err.contains(QStringLiteral("did you mean `ollamadev help commit`")),
+          "…and names the command that was meant");
+
+    // A bare `git --help` asks about our wrapper, so we answer. With a subcommand
+    // present the line is git's, and must reach git untouched.
+    const CliRun bareGit = runCli({"git", "--help"});
+    check(bareGit.out.contains(QStringLiteral("Usage: ollamadev git")),
+          "a bare `git --help` describes our wrapper");
+    const CliRun gitLog = runCli({"git", "log", "--help"});
+    check(!gitLog.out.contains(QStringLiteral("Usage: ollamadev git")),
+          "…but `git log --help` belongs to git and is forwarded");
+}
+
+// The completions were three hand-kept lists that had drifted twelve commands
+// behind the dispatch: acp, agents, export, import, plugin, plugins, route, tidy,
+// update, upgrade, workspace and ws could not be completed at all. They are
+// generated from the command table now, and this is the test that keeps them
+// honest — it fails the moment a new command is added without one.
+static void testCompletionsCoverEveryCommand() {
+    const CliRun index = runCli({"help"});
+    QStringList commands;
+    const QStringList lines = index.out.split('\n');
+    for (const QString& line : lines) {
+        if (!line.startsWith(QStringLiteral("  ")) || line.startsWith(QStringLiteral("   ")))
+            continue;
+        const QString name = line.trimmed().section(' ', 0, 0);
+        if (!name.isEmpty() && !name.startsWith('-')) commands << name;
+    }
+    check(commands.size() > 40, "the help index lists the whole command surface");
+
+    for (const QString& shell : {QStringLiteral("bash"), QStringLiteral("zsh"),
+                                 QStringLiteral("fish")}) {
+        const CliRun c = runCli({"completion", shell});
+        check(c.code == 0 && !c.out.isEmpty(), "completion " + shell.toUtf8() + " prints a script");
+        QStringList missing;
+        for (const QString& cmd : commands)
+            if (!c.out.contains(cmd)) missing << cmd;
+        check(missing.isEmpty(),
+              "completion " + shell.toUtf8() + " offers every command (missing: " +
+                  missing.join(',').toUtf8() + ")");
+    }
+
+    // A blurb carrying an apostrophe ("someone else's") sits inside a single-quoted
+    // zsh/fish literal, where an unescaped one ends the string and breaks the file.
+    const CliRun zsh = runCli({"completion", "zsh"});
+    check(zsh.out.contains(QStringLiteral("'\\''")), "zsh blurbs escape their apostrophes");
+}
+
+// Colour was controllable only by environment or config. A flag is what a script
+// reaches for, and --color has to force colour back ON for pipes that do render
+// escapes (less -R, CI logs) — so it overrides the not-a-tty test in both
+// directions.
+static void testColorFlags() {
+    const QString esc = QStringLiteral("\033[");
+
+    // stdout is a pipe here, so the baseline is already colourless; --color must
+    // put it back.
+    const CliRun forced = runCli({"--color", "help"});
+    check(forced.out.contains(esc), "--color emits colour even when stdout is a pipe");
+
+    const CliRun plain = runCli({"help"});
+    check(!plain.out.contains(esc), "…and a pipe is otherwise still colourless");
+
+    const CliRun off = runCli({"--no-color", "help"});
+    check(!off.out.contains(esc), "--no-color stays colourless");
+
+    // Both spellings must be known flags, or the arg checker rejects them.
+    check(forced.code == 0 && off.code == 0, "--color and --no-color are accepted flags");
+}
+
 // The CLI must act on the folder it was run in. It used to chdir into the
 // "active workspace" whenever cwd was not itself bookmarked — so with $HOME
 // bookmarked and active, a one-shot in a scratch directory went and edited files
@@ -1567,6 +1680,9 @@ int main(int argc, char** argv) {
     s << "cli-args\n";   s.flush(); testCliArgChecking();
     s << "cwd\n";        s.flush(); testCwdWinsOverActiveWorkspace();
     s << "color\n";      s.flush(); testColorGating();
+    s << "help\n";       s.flush(); testHelpIsACommand();
+    s << "completions\n"; s.flush(); testCompletionsCoverEveryCommand();
+    s << "color-flags\n"; s.flush(); testColorFlags();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";
     s.flush();

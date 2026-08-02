@@ -122,6 +122,9 @@ bool Tui::stdoutIsTty() { return ::isatty(STDOUT_FILENO) == 1; }
 bool Tui::stdinIsTty() { return ::isatty(STDIN_FILENO) == 1; }
 
 namespace {
+// -1 nothing asked, 0 --no-color, 1 --color.
+int g_colorOverride = -1;
+
 // The half of the decision that does not depend on which stream we are writing
 // to. Not cached: a long-lived process (the REPL, a watch) can have its streams
 // reopened under it, and the cost is two getenvs plus a config lookup.
@@ -132,8 +135,16 @@ bool colorAllowed() {
 }
 }  // namespace
 
-bool Tui::colorEnabled() { return colorAllowed() && stdoutIsTty(); }
-bool Tui::colorEnabledErr() { return colorAllowed() && ::isatty(STDERR_FILENO) == 1; }
+void Tui::setColorOverride(bool on) { g_colorOverride = on ? 1 : 0; }
+
+bool Tui::colorEnabled() {
+    if (g_colorOverride >= 0) return g_colorOverride == 1;
+    return colorAllowed() && stdoutIsTty();
+}
+bool Tui::colorEnabledErr() {
+    if (g_colorOverride >= 0) return g_colorOverride == 1;
+    return colorAllowed() && ::isatty(STDERR_FILENO) == 1;
+}
 
 const char* Tui::paint(const char* escape) { return colorEnabled() ? escape : ""; }
 const char* Tui::paintErr(const char* escape) { return colorEnabledErr() ? escape : ""; }

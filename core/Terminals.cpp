@@ -636,7 +636,22 @@ public:
         QLocalServer::removeServer(path);
         connect(&server_, &QLocalServer::newConnection, this, &Host::onClient);
         if (!server_.listen(path)) {
-            *err = QStringLiteral("cannot listen on %1: %2").arg(path, server_.errorString());
+            // A unix socket path lives in sockaddr_un::sun_path, which is 108
+            // bytes INCLUDING the terminator — a hard kernel limit, not Qt's.
+            // Qt reports it as the bare "Name error", which tells you nothing:
+            // the path is right there in the message and looks perfectly valid.
+            // Say what is actually wrong, because the fix (a shorter
+            // OLLAMADEV_HOME) is not one anybody would guess from "Name error".
+            const int bytes = path.toUtf8().size();
+            if (bytes >= 108)
+                *err = QStringLiteral(
+                           "socket path is %1 bytes, over the 107-byte limit the kernel allows "
+                           "for a unix socket: %2\nuse a shorter OLLAMADEV_HOME — the terminal "
+                           "control socket lives under it")
+                           .arg(bytes)
+                           .arg(path);
+            else
+                *err = QStringLiteral("cannot listen on %1: %2").arg(path, server_.errorString());
             return false;
         }
 

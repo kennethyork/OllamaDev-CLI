@@ -2998,34 +2998,48 @@ int cmdTerminal(const QStringList& args) {
     QString e;
 
     if (sub == "create" || sub == "spawn") {
-        const QString id = args.value(1);
+        // OUR flags (--cwd, --model, -m) may only appear before the program to
+        // run. From the program name onward every token belongs to it, dashes
+        // and all — which is how env(1), timeout(1) and nohup(1) all behave, and
+        // the only reading under which `spawn build sh -c "…"` can work.
+        //
+        // This used to drop every token starting with a dash from the command,
+        // so `sh -c "echo hi"` reached sh as `sh "echo hi"` and it tried to open
+        // the script as a FILE. `make -j8`, `tail -f`, `python -m http.server`
+        // were all mangled the same way.
+        static const QStringList ourValueFlags{"--cwd", "--model", "-m"};
+        auto skipOurFlags = [&](int& k) {
+            while (k < args.size() && args.at(k).startsWith('-') &&
+                   args.at(k) != QLatin1String("-")) {
+                if (ourValueFlags.contains(args.at(k))) ++k;
+                ++k;
+            }
+        };
+
+        int at = 1;
+        skipOurFlags(at);          // `terminal spawn --cwd /x build make -j8`
+        const QString id = args.value(at);
+        if (!id.isEmpty()) ++at;
+        skipOurFlags(at);          // …or between the name and the program
+        const QStringList command = sub == "spawn" ? args.mid(at) : QStringList();
+
         if (id.isEmpty()) {
             err() << "usage: ollamadev terminal " << sub
                   << " <name>" << (sub == "spawn" ? " <command…>" : "") << " [--cwd <dir>]\n";
             err().flush();
             return 2;
         }
-        const QString cwd = flagValue(args, "--cwd", QDir::currentPath());
-        const QString model = flagValue(args, "--model", flagValue(args, "-m"));
-
-        // Everything after the name that is not a flag or a flag's value is the
-        // command to run (spawn only).
-        QStringList command;
-        if (sub == "spawn") {
-            static const QStringList takesValue{"--cwd", "--model", "-m"};
-            for (int i = 2; i < args.size(); ++i) {
-                if (args.at(i).startsWith('-')) {
-                    if (takesValue.contains(args.at(i))) ++i;
-                    continue;
-                }
-                command << args.at(i);
-            }
-            if (command.isEmpty()) {
-                err() << "usage: ollamadev terminal spawn <name> <command…>\n";
-                err().flush();
-                return 2;
-            }
+        if (sub == "spawn" && command.isEmpty()) {
+            err() << "usage: ollamadev terminal spawn <name> <command…>\n";
+            err().flush();
+            return 2;
         }
+
+        // Read our own flags only from the part of the line that is ours. A
+        // program with its own --model must not have its value stolen.
+        const QStringList ours = args.mid(0, at);
+        const QString cwd = flagValue(ours, "--cwd", QDir::currentPath());
+        const QString model = flagValue(ours, "--model", flagValue(ours, "-m"));
 
         const TerminalInfo t = Terminals::spawn(id, command, cwd, model, &e);
         if (t.isNull()) {

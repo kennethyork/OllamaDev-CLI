@@ -160,6 +160,10 @@ python3 tests/fuzz_argv.py ./build-asan/cli/ollamadev 250 <seed>
 # completion, clean shutdown. Needs no editor.
 python3 tests/lsp_probe.py ./build/cli/ollamadev
 
+# Drive the Agent Client Protocol over stdio. The handshake half is model-free
+# and runs offline; --prompt adds one real turn.
+python3 tests/acp_probe.py ./build/cli/ollamadev [--prompt]
+
 # The crew's opt-in brains, end to end against a live model. EXPENSIVE — a full
 # pass runs six crews with parallel coders; use --only, and a small --model.
 python3 tests/crew_probe.py ./build/cli/ollamadev --only route

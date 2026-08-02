@@ -1258,6 +1258,41 @@ int cmdCrew(const QStringList& args) {
     o.researcherBackend = str("--researcher-backend", "researcherBackend");
     o.researcherModel = str("--researcher-model", "researcherModel");
 
+    // -m/--model and --backend are listed in the global Options block, directly
+    // above the crew's own flags — and nothing on this path read them. `crew
+    // "task" -m qwen3.5:2b` ignored the model outright and every role fell back
+    // to config, so a run could look pinned while being nothing of the sort.
+    // They are the DEFAULT for any role that does not name its own now, which is
+    // what the help implies and what every other command already does with them.
+    //
+    // An explicit --coder-model still wins, and so does --route for a role left
+    // unspecified: this only fills what would otherwise have come from config.
+    const QString globalBackend = flagValue(args, "--backend");
+    if (!globalBackend.isEmpty()) {
+        if (o.coderBackend.isEmpty()) o.coderBackend = globalBackend;
+        if (o.directorBackend.isEmpty()) o.directorBackend = globalBackend;
+        if (o.auditorBackend.isEmpty()) o.auditorBackend = globalBackend;
+        if (o.researcherBackend.isEmpty()) o.researcherBackend = globalBackend;
+    }
+    const QString globalModel = flagValue(args, "--model", flagValue(args, "-m"));
+    if (!globalModel.isEmpty()) {
+        // A model tag belongs to exactly one backend, so it may only be handed to
+        // a role that is actually ON that backend. Giving an Ollama tag to a
+        // Claude role makes that CLI reject the whole run.
+        const QString on = globalBackend.isEmpty()
+                               ? Config::str(QStringLiteral("model.backend"),
+                                             QStringLiteral("ollama"))
+                               : globalBackend;
+        auto fill = [&](const QString& roleBackend, QString& roleModel) {
+            const QString effective = roleBackend.isEmpty() ? on : roleBackend;
+            if (roleModel.isEmpty() && effective == on) roleModel = globalModel;
+        };
+        fill(o.coderBackend, o.coderModel);
+        fill(o.directorBackend, o.directorModel);
+        fill(o.auditorBackend, o.auditorModel);
+        fill(o.researcherBackend, o.researcherModel);
+    }
+
     if (o.task.isEmpty()) {
         err() << "crew needs a task: ollamadev crew \"build X\"\n";
         err().flush();

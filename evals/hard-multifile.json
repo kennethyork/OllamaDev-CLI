@@ -1,0 +1,41 @@
+[
+  {
+    "name": "hard-cross-file-rename",
+    "prompt": "Rename the function compute_total to calculate_total everywhere in this project. Every call site must be updated and nothing may still refer to the old name.",
+    "files": {
+      "core.py": "def compute_total(items):\n    return sum(items)\n",
+      "report.py": "from core import compute_total\n\n\ndef summary(items):\n    return 'total=%d' % compute_total(items)\n",
+      "main.py": "from core import compute_total\nfrom report import summary\n\n\ndef run(items):\n    return (compute_total(items), summary(items))\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"import glob,main; src=''.join(open(f).read() for f in glob.glob('*.py')); assert 'compute_total' not in src, 'old name still present'; assert src.count('calculate_total')>=3, 'not renamed everywhere'; assert main.run([1,2,3])==(6,'total=6'); print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "hard-follow-project-pattern",
+    "prompt": "In net.py the timeout is hardcoded. Make it configurable in exactly the same way the rest of this project already makes things configurable. Do not invent a new mechanism, and keep 30 as the default.",
+    "files": {
+      "settings.py": "import os\n\nRETRIES = int(os.environ.get('APP_RETRIES', '3'))\nWORKERS = int(os.environ.get('APP_WORKERS', '4'))\n",
+      "net.py": "TIMEOUT = 30\n\n\ndef timeout():\n    return TIMEOUT\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"import os,subprocess,sys; src=open('net.py').read(); assert 'environ' in src, 'not using the environment'; assert 'APP_TIMEOUT' in src, 'did not follow the APP_ naming pattern'; e=dict(os.environ,APP_TIMEOUT='99'); r=subprocess.run([sys.executable,'-c','import net;print(net.timeout())'],capture_output=True,text=True,env=e); assert r.stdout.strip()=='99', r.stdout+r.stderr; d=subprocess.run([sys.executable,'-c','import net;print(net.timeout())'],capture_output=True,text=True); assert d.stdout.strip()=='30', d.stdout+d.stderr; print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "hard-three-step-pipeline",
+    "prompt": "Build a tiny word-frequency tool as three files. tokens.py: tokenize(text) returning a list of lowercase words with punctuation stripped. counts.py: top(text, n) importing tokenize from tokens and returning the n most common (word, count) pairs, most frequent first, ties broken alphabetically. cli.py: when run as a script with a filename argument, prints the single most common word in that file and nothing else.",
+    "files": {
+      "sample.txt": "the cat sat on the mat. The CAT! the dog?\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"import subprocess,sys; from tokens import tokenize; from counts import top; assert tokenize('The CAT! dog?')==['the','cat','dog'], tokenize('The CAT! dog?'); assert top('a b b c c',2)==[('b',2),('c',2)], top('a b b c c',2); r=subprocess.run([sys.executable,'cli.py','sample.txt'],capture_output=True,text=True); assert r.stdout.strip()=='the', r.stdout+r.stderr; print('OK')\"",
+      "expect": "OK"
+    }
+  }
+]

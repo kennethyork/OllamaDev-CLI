@@ -1,0 +1,47 @@
+[
+  {
+    "name": "hard-extend-without-breaking",
+    "prompt": "parse_range in parser.py turns '1-5' into [1, 2, 3, 4, 5]. Make it also accept a bare number, so '7' returns [7]. Everything it already does must keep working.",
+    "files": {
+      "parser.py": "def parse_range(s):\n    lo, hi = s.split('-')\n    return list(range(int(lo), int(hi) + 1))\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"from parser import parse_range as p; assert p('1-5')==[1,2,3,4,5], p('1-5'); assert p('7')==[7], p('7'); assert p('3-3')==[3], p('3-3'); assert p('0-2')==[0,1,2], p('0-2'); print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "hard-preserve-unknown-keys",
+    "prompt": "Write migrate.py with a function migrate(d) that upgrades a v1 config dict to v2: set version to 2, and replace the 'timeout' key (in seconds) with 'timeout_ms' in milliseconds. Every other key must survive untouched, including ones you have not seen before. Do not mutate the input.",
+    "files": {
+      "example.json": "{\"version\": 1, \"timeout\": 30, \"name\": \"demo\"}\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"from migrate import migrate; src={'version':1,'timeout':30,'nested':{'a':1},'surprise':'keep me'}; out=migrate(src); assert out['version']==2, out; assert out['timeout_ms']==30000, out; assert 'timeout' not in out, out; assert out['surprise']=='keep me', 'dropped an unknown key'; assert out['nested']=={'a':1}, out; assert src['version']==1 and 'timeout' in src, 'mutated the input'; print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "hard-refactor-same-behaviour",
+    "prompt": "Refactor area() in shapes.py to dispatch through a dictionary of shape name to function, instead of the if/elif chain. Its behaviour must not change in any way, including what it does with an unknown shape.",
+    "files": {
+      "shapes.py": "def area(kind, size):\n    if kind == 'square':\n        return size * size\n    elif kind == 'circle':\n        return 3.14159 * size * size\n    elif kind == 'triangle':\n        return 0.5 * size * size\n    else:\n        raise ValueError('unknown shape: ' + kind)\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"import shapes; src=open('shapes.py').read(); assert 'elif' not in src, 'still an if/elif chain'; assert '{' in src, 'no dispatch dict'; assert shapes.area('square',3)==9; assert abs(shapes.area('circle',2)-12.56636)<1e-6; assert shapes.area('triangle',4)==8.0; import traceback; ok=False\ntry: shapes.area('hexagon',1)\nexcept ValueError as e: ok='hexagon' in str(e)\nassert ok, 'unknown shape no longer raises ValueError naming the shape'; print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "hard-error-contract",
+    "prompt": "Write validate.py with validate(d). It raises KeyError if there is no 'id' key, TypeError if the id is not an int (a bool is not an int for this purpose), ValueError if the id is zero or negative, and otherwise returns True.",
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"from validate import validate as v; import sys\ndef raises(f,exc):\n    try: f()\n    except exc: return True\n    except Exception: return False\n    return False\nassert raises(lambda: v({}), KeyError), 'missing id should raise KeyError'\nassert raises(lambda: v({'id':'7'}), TypeError), 'string id should raise TypeError'\nassert raises(lambda: v({'id':True}), TypeError), 'bool id should raise TypeError'\nassert raises(lambda: v({'id':0}), ValueError), 'zero id should raise ValueError'\nassert raises(lambda: v({'id':-3}), ValueError), 'negative id should raise ValueError'\nassert v({'id':5}) is True\nprint('OK')\"",
+      "expect": "OK"
+    }
+  }
+]

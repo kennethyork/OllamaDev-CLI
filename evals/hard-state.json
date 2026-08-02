@@ -1,0 +1,32 @@
+[
+  {
+    "name": "hard-lru-eviction-order",
+    "prompt": "Write lru.py with a class LRU(capacity). get(key) returns the value or None, and put(key, value) stores it. When it is full, putting a new key evicts the least recently used one. A get counts as a use.",
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"from lru import LRU; c=LRU(2); c.put('a',1); c.put('b',2); assert c.get('a')==1, 'a should still be there'; c.put('c',3); assert c.get('b') is None, 'b was least recently used and should have gone'; assert c.get('a')==1, 'a was used recently and should have stayed'; assert c.get('c')==3; c.put('a',9); assert c.get('a')==9, 'put on an existing key should update it'; assert c.get('c')==3, 'updating a key must not evict anything'; print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "hard-idempotent-append",
+    "prompt": "Write ensure.py with ensure(path, line) that appends line to the file only when that exact line is not already present. Calling it repeatedly must never add a duplicate. The file may not end with a newline.",
+    "files": {
+      "conf.ini": "host=localhost\nport=3000"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"from ensure import ensure; ensure('conf.ini','debug=true'); ensure('conf.ini','debug=true'); ensure('conf.ini','debug=true'); t=open('conf.ini').read(); assert t.count('debug=true')==1, 'duplicated the line: '+repr(t); assert 'host=localhost' in t and 'port=3000' in t, 'lost existing content'; ls=[l for l in t.splitlines() if l.strip()]; assert ls[-1]=='debug=true', ls; ensure('conf.ini','port=3000'); assert open('conf.ini').read().count('port=3000')==1, 'appended a line that was already there'; print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "hard-stable-group",
+    "prompt": "Write group.py with group_by_length(words) returning a dict mapping word length to the list of words of that length. Within each list the words must stay in the order they appeared, and duplicates must be kept.",
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"from group import group_by_length as g; r=g(['bb','a','cc','d','bb','eee']); assert r[2]==['bb','cc','bb'], r; assert r[1]==['a','d'], r; assert r[3]==['eee'], r; assert g([])=={}, g([]); print('OK')\"",
+      "expect": "OK"
+    }
+  }
+]

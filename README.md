@@ -132,6 +132,14 @@ Your own tasks join the suite: drop `*.json` into `./evals` or
 A check whose interpreter is missing is **skipped**, not failed — it stays out of
 the denominator, so the rate measures the model rather than the box.
 
+The built-in 26 are deliberately small, and they are **saturated** — everything
+capable scores 96–100%, so they answer "does the agent work" and nothing finer.
+[`evals/`](evals/README.md) adds ten harder ones that discriminate: cross-file
+consistency, following an unstated project convention, multi-step pipelines,
+migrations that must not drop unknown keys. Each has a reference solution, and
+`python3 tests/validate_evals.py` proves the checks agree with a correct answer
+before you trust a failure.
+
 ## Layout
 
 ```

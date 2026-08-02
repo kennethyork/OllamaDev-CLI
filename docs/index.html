@@ -293,7 +293,8 @@
       <div class="cmd"><code>crew "&lt;task&gt;"</code><span>Research → plan → N coders → audit → land.</span></div>
       <div class="cmd"><code>crew accept|discard &lt;n&gt;</code><span>Apply held work into your folder, or throw it away.</span></div>
       <div class="cmd"><code>crew steer &lt;n&gt; "…"</code><span>Talk to a running coder.</span></div>
-      <div class="cmd"><code>crew resume [id]</code><span>Finish an interrupted run; the director re-plans what's left.</span></div>
+      <div class="cmd"><code>crew resume [id]</code><span>Finish an interrupted run; the director re-plans what's left. With no id it only resumes a run started in <em>this</em> folder — runs are kept until you prune, so the newest on disk may belong to another project.</span></div>
+      <div class="cmd"><code>crew prune</code><span>Remove abandoned runs (<code>--days N</code> · <code>--dry-run</code> · <code>--yes</code>). Never touches the live run or anything still waiting on the board, and will not delete unattended without <code>--yes</code>.</span></div>
       <div class="cmd"><code>crew role|pack</code><span>Personas the director assigns · saved crew configs.</span></div>
       <div class="cmd"><code>board</code><span>Pending decisions.</span></div>
       <div class="cmd"><code>route [--run] "…"</code><span>Show (or run) which model the brain picks.</span></div>

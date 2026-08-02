@@ -1761,6 +1761,120 @@ static void testJsonCoverage() {
           "…and prints nothing to stdout, so a parser sees no half-answer");
 }
 
+// Crew runs were never collected: an interrupted run left its directory behind
+// and nothing removed it, so they accumulated for months. Two consequences, both
+// fixed here.
+//
+// Pruning deletes, which is the one thing in this CLI that cannot be undone, so
+// what it REFUSES to touch matters more than what it removes. These assertions
+// are that refusal.
+static void testCrewPrune() {
+    QTemporaryDir home, work;
+    if (!home.isValid() || !work.isValid()) {
+        check(false, "temp dirs for the prune test");
+        return;
+    }
+    const QString state = home.filePath(QStringLiteral("state"));
+    const QString crew = state + QStringLiteral("/crew");
+    QDir().mkpath(crew);
+    QDir().mkpath(state + QStringLiteral("/board"));
+
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    const auto seed = [&](int daysAgo, const QString& task) {
+        const QString id = QStringLiteral("crew_%1").arg(now - qint64(daysAgo) * 86400);
+        QDir().mkpath(crew + QLatin1Char('/') + id);
+        QFile f(crew + QLatin1Char('/') + id + QStringLiteral("/plan.json"));
+        if (f.open(QIODevice::WriteOnly))
+            f.write(QStringLiteral("{\"task\":\"%1\",\"cwd\":\"%2\",\"subtasks\":[{\"n\":1}]}")
+                        .arg(task, work.path())
+                        .toUtf8());
+        return id;
+    };
+    const QString ancient = seed(90, QStringLiteral("ancient"));
+    const QString old = seed(60, QStringLiteral("old"));
+    const QString held = seed(45, QStringLiteral("held work"));
+    const QString recent = seed(2, QStringLiteral("recent"));
+    const QString live = seed(120, QStringLiteral("live"));  // OLDEST, and protected
+
+    const auto write = [](const QString& path, const QString& body) {
+        QFile f(path);
+        if (f.open(QIODevice::WriteOnly)) f.write(body.toUtf8());
+    };
+    write(crew + QStringLiteral("/current.json"),
+          QStringLiteral("{\"runId\":\"%1\",\"subtasks\":[]}").arg(live));
+    write(state + QStringLiteral("/board/current.json"),
+          QStringLiteral("{\"pending\":[{\"id\":\"d1\",\"kind\":\"crew_branch\",\"summary\":\"h\","
+                         "\"data\":{\"runId\":\"%1\",\"n\":1}}]}")
+              .arg(held));
+
+    const auto run = [&](const QStringList& a) {
+        QProcess p;
+        p.setProgram(QStringLiteral(ODV_CLI_BIN));
+        p.setArguments(a);
+        p.setWorkingDirectory(work.path());
+        QProcessEnvironment e = QProcessEnvironment::systemEnvironment();
+        e.insert(QStringLiteral("HOME"), home.path());
+        e.insert(QStringLiteral("OLLAMADEV_HOME"), state);
+        p.setProcessEnvironment(e);
+        p.start();
+        CliRun r;
+        if (!p.waitForStarted(5000) || !p.waitForFinished(30000)) {
+            p.kill();
+            return r;
+        }
+        r.code = p.exitCode();
+        r.out = QString::fromUtf8(p.readAllStandardOutput());
+        r.err = QString::fromUtf8(p.readAllStandardError());
+        return r;
+    };
+    const auto exists = [&](const QString& id) {
+        return QFileInfo::exists(crew + QLatin1Char('/') + id);
+    };
+
+    const CliRun dry = run({"crew", "prune", "--dry-run"});
+    check(dry.code == 0, "`crew prune --dry-run` succeeds");
+    check(dry.out.contains(ancient) && dry.out.contains(old), "…and names what it would remove");
+    check(!dry.out.contains(live), "…never the live run, though it is the oldest of all");
+    check(!dry.out.contains(held), "…never a run with a changeset still on the board");
+    check(!dry.out.contains(recent), "…never one inside the age window");
+    check(exists(ancient) && exists(old), "…and --dry-run removes nothing");
+
+    // Unattended and unconfirmed must not delete: silence is not consent for
+    // something irreversible.
+    const CliRun unattended = run({"crew", "prune"});
+    check(unattended.code == 1, "prune with no tty and no --yes refuses");
+    check(exists(ancient), "…and leaves everything in place");
+
+    const CliRun done = run({"crew", "prune", "--yes"});
+    check(done.code == 0 && done.out.contains(QStringLiteral("removed 2")),
+          "`crew prune --yes` removes exactly the eligible runs");
+    check(!exists(ancient) && !exists(old), "…they are gone");
+    check(exists(live), "…the live run survives");
+    check(exists(held), "…the run with held work survives");
+    check(exists(recent), "…and so does the recent one");
+
+    // A bare `crew resume` must not adopt another folder's plan. Every seeded run
+    // belongs to `work`, so from an unrelated directory there is nothing to take.
+    QTemporaryDir elsewhere;
+    if (elsewhere.isValid()) {
+        QProcess p;
+        p.setProgram(QStringLiteral(ODV_CLI_BIN));
+        p.setArguments({QStringLiteral("crew"), QStringLiteral("resume")});
+        p.setWorkingDirectory(elsewhere.path());
+        QProcessEnvironment e = QProcessEnvironment::systemEnvironment();
+        e.insert(QStringLiteral("HOME"), home.path());
+        e.insert(QStringLiteral("OLLAMADEV_HOME"), state);
+        p.setProcessEnvironment(e);
+        p.start();
+        p.waitForFinished(30000);
+        const QString msg = QString::fromUtf8(p.readAllStandardError());
+        check(p.exitCode() == 1, "a bare `crew resume` in an unrelated folder refuses");
+        check(msg.contains(QStringLiteral("no run from this folder")),
+              "…saying the runs on disk belong elsewhere");
+        check(msg.contains(QStringLiteral("crew resume list")), "…and how to see them");
+    }
+}
+
 // Invariants that must hold for EVERY command, enumerated from `ollamadev help`
 // rather than from a list kept here — so a command added tomorrow is swept
 // tomorrow, without anyone remembering to add it.
@@ -2107,6 +2221,7 @@ int main(int argc, char** argv) {
     s << "subcmds\n";    s.flush(); testUnknownSubcommands();
     s << "endopts\n";    s.flush(); testEndOfOptions();
     s << "invariants\n"; s.flush(); testEveryCommandInvariants();
+    s << "crew-prune\n"; s.flush(); testCrewPrune();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";
     s.flush();

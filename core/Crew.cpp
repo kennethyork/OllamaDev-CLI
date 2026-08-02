@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QSet>
 #include <QTextStream>
 #include <QThread>
@@ -1339,6 +1340,10 @@ QVector<Crew::RunInfo> Crew::resumable() {
         info.runId = id;
         info.task = plan.value("task").toString();
         info.cwd = plan.value("cwd").toString();
+        // crew_<unixSeconds>. A malformed name leaves `started` invalid rather
+        // than guessing, and prune() treats invalid as "do not touch".
+        const qint64 secs = QStringView{id}.mid(5).toLongLong();
+        if (secs > 0) info.started = QDateTime::fromSecsSinceEpoch(secs);
         const QJsonArray subs = plan.value("subtasks").toArray();
         info.total = subs.size();
         if (id == liveId) {
@@ -1350,6 +1355,54 @@ QVector<Crew::RunInfo> Crew::resumable() {
         runs.append(info);
     }
     return runs;
+}
+
+QVector<Crew::RunInfo> Crew::prunable(int olderThanDays) {
+    const QString liveId = boardState().value(QStringLiteral("runId")).toString();
+
+    // Every run that still has a changeset on the board. That is finished work
+    // the user has not ruled on yet; age is irrelevant to whether they still
+    // want it, so it is protected outright.
+    QSet<QString> held;
+    for (const Decision& d : Board::pending()) {
+        const QString rid = d.data.value(QStringLiteral("runId")).toString();
+        if (!rid.isEmpty()) held.insert(rid);
+    }
+
+    const QDateTime cutoff = QDateTime::currentDateTime().addDays(-qMax(0, olderThanDays));
+    QVector<RunInfo> out;
+    for (const RunInfo& r : resumable()) {
+        if (r.runId == liveId) continue;
+        if (held.contains(r.runId)) continue;
+        // An unparseable id means we cannot date it, and something we cannot date
+        // is something we do not delete.
+        if (!r.started.isValid() || r.started > cutoff) continue;
+        out.append(r);
+    }
+    return out;
+}
+
+int Crew::prune(const QVector<RunInfo>& runs, QString* err) {
+    const QString root = QDir(Config::crewDir()).absolutePath();
+    int gone = 0;
+    for (const RunInfo& r : runs) {
+        // Belt and braces before a recursive delete: the id has to be a plain
+        // crew_<digits> name, and the resolved directory has to still sit inside
+        // the crew directory. A traversal here would remove an arbitrary tree.
+        static const QRegularExpression valid(QStringLiteral("^crew_[0-9]+$"));
+        if (!valid.match(r.runId).hasMatch()) {
+            if (err && err->isEmpty()) *err = QStringLiteral("refusing odd run id: %1").arg(r.runId);
+            continue;
+        }
+        QDir d(root + QLatin1Char('/') + r.runId);
+        if (!d.absolutePath().startsWith(root + QLatin1Char('/'))) {
+            if (err && err->isEmpty()) *err = QStringLiteral("refusing path outside the crew dir");
+            continue;
+        }
+        if (d.removeRecursively()) ++gone;
+        else if (err && err->isEmpty()) *err = QStringLiteral("could not remove %1").arg(r.runId);
+    }
+    return gone;
 }
 
 }  // namespace odv

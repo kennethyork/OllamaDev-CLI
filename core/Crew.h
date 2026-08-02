@@ -181,8 +181,25 @@ public:
         QString cwd;  // the project the run belongs to (empty for pre-cwd runs)
         int done = 0;
         int total = 0;
+        QDateTime started;  // from the run id, which is crew_<unixSeconds>
     };
     static QVector<RunInfo> resumable();
+
+    // Abandoned runs old enough to remove. Runs accumulate forever otherwise —
+    // an interrupted crew leaves its directory behind and nothing ever collects
+    // it, so `crew resume list` grows without bound.
+    //
+    // Three kinds are NEVER returned, whatever their age, because deleting them
+    // would destroy something the user still owns:
+    //   · the live run current.json points at
+    //   · any run with a changeset still waiting on the board — that is work the
+    //     crew finished and the user has not yet accepted or discarded
+    //   · anything newer than `olderThanDays`
+    static QVector<RunInfo> prunable(int olderThanDays);
+
+    // Delete those run directories. Returns how many went; on any failure the
+    // rest still go, and `err` names the first one that did not.
+    static int prune(const QVector<RunInfo>& runs, QString* err = nullptr);
 
     // A self-contained Markdown record of a run — the task, the plan (each
     // subtask's role/model/route/prompt) and, when the run is the current one,

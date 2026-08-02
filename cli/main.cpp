@@ -279,8 +279,14 @@ const QVector<CommandDoc>& commandDocs() {
          "  crew discard <n>       throw held work away\n"
          "  crew steer <n> \"…\"     talk to a running coder (0 = the whole crew)\n"
          "  crew resume [id]       finish an interrupted run (--replay to skip re-planning)\n"
+         "  crew resume list       every run still on disk, newest first\n"
+         "  crew prune             remove abandoned runs (--days N, --dry-run, --yes)\n"
          "  crew role | pack       personas the Director assigns · saved crew configs\n"
          "  crew clear             empty the board\n\n"
+         "A bare `crew resume` only resumes a run started in this folder. Runs are\n"
+         "kept until you prune, so the newest one on disk may belong elsewhere —\n"
+         "name it explicitly to resume that. `prune` never touches the live run or\n"
+         "anything still waiting on the board.\n\n"
          "Sizing:\n"
          "  --max N                coders (default 4)\n"
          "  --parallel N           cap concurrency (default: the backend's real limit)\n"
@@ -1048,6 +1054,75 @@ static int runCrewAndReport(CrewOptions& o) {
 
 // `ollamadev crew resume [runId|list]` — finish an interrupted run. With no id it
 // picks the most recent resumable run; coders that already finished are not re-run.
+// `crew prune [--days N] [--dry-run] [--yes]` — collect abandoned runs.
+//
+// Deleting is the one thing here that cannot be undone, so it defaults to
+// showing rather than doing: without --yes it prints what it would remove and
+// asks. Crew::prunable() has already excluded the live run and anything still
+// on the board, so nothing you have yet to rule on can be caught by this.
+int cmdCrewPrune(const QStringList& args) {
+    const int days = flagValue(args, "--days", QStringLiteral("30")).toInt();
+    if (days < 0) {
+        err() << "--days must not be negative\n";
+        err().flush();
+        return 2;
+    }
+    const QVector<Crew::RunInfo> doomed = Crew::prunable(days);
+    const int total = Crew::resumable().size();
+    if (doomed.isEmpty()) {
+        out() << "nothing to prune — " << total << " run(s), none older than " << days
+              << " days without held work\n";
+        out().flush();
+        return 0;
+    }
+
+    out() << "would remove " << doomed.size() << " of " << total << " run(s), older than " << days
+          << " days:\n";
+    for (const Crew::RunInfo& r : doomed) {
+        const QString age =
+            r.started.isValid()
+                ? QStringLiteral("%1d").arg(r.started.daysTo(QDateTime::currentDateTime()))
+                : QStringLiteral("?");
+        out() << "  " << r.runId << "   " << age.rightJustified(4) << " old   "
+              << r.task.left(50) << "\n";
+    }
+    out() << "\nthe live run and anything still on the board are never touched.\n";
+    out().flush();
+
+    if (hasFlag(args, "--dry-run")) return 0;
+    if (!hasFlag(args, "--yes")) {
+        // Non-interactive and unconfirmed: do nothing and say how to proceed.
+        // Silently deleting because nobody was there to object is the wrong way
+        // round for an irreversible operation.
+        if (!Tui::stdinIsTty()) {
+            err() << "not a terminal — re-run with --yes to actually remove them\n";
+            err().flush();
+            return 1;
+        }
+        out() << "remove them? [y/N] ";
+        out().flush();
+        QTextStream in(stdin);
+        const QString answer = in.readLine().trimmed().toLower();
+        if (answer != QLatin1String("y") && answer != QLatin1String("yes")) {
+            out() << "left alone\n";
+            out().flush();
+            return 0;
+        }
+    }
+
+    QString e;
+    const int gone = Crew::prune(doomed, &e);
+    out() << "✓ removed " << gone << " run(s)\n";
+    out().flush();
+    if (gone != doomed.size()) {
+        err() << "✗ " << (e.isEmpty() ? QStringLiteral("some runs could not be removed") : e)
+              << "\n";
+        err().flush();
+        return 1;
+    }
+    return 0;
+}
+
 int cmdCrewResume(const QStringList& args) {
     const QVector<Crew::RunInfo> runs = Crew::resumable();
     if (args.value(0) == "list") {
@@ -1056,9 +1131,20 @@ int cmdCrewResume(const QStringList& args) {
             out().flush();
             return 0;
         }
-        for (const auto& r : runs)
-            out() << "  " << r.runId << "   " << r.done << "/" << r.total << " done   "
-                  << r.task.left(60) << "\n";
+        // Age and project, because with no pruning this list spans months and the
+        // id alone does not tell you whether a run is yours or from last spring.
+        const QString here = QDir::currentPath();
+        for (const auto& r : runs) {
+            const QString age =
+                r.started.isValid()
+                    ? QStringLiteral("%1d").arg(r.started.daysTo(QDateTime::currentDateTime()))
+                    : QStringLiteral("?");
+            const bool mine = !r.cwd.isEmpty() && QDir(r.cwd).absolutePath() == here;
+            out() << "  " << (mine ? "*" : " ") << " " << r.runId << "   " << r.done << "/"
+                  << r.total << " done   " << age.rightJustified(4) << " old   "
+                  << r.task.left(50) << "\n";
+        }
+        out() << "\n * = from this folder.  Old ones: ollamadev crew prune\n";
         out().flush();
         return 0;
     }
@@ -1070,7 +1156,27 @@ int cmdCrewResume(const QStringList& args) {
             err().flush();
             return 1;
         }
-        runId = runs.first().runId;  // newest
+        // The newest run overall is the wrong default. Runs are never collected
+        // unless you prune, so the newest can be weeks old and belong to another
+        // project entirely — and resuming it would set coders to work in THIS
+        // folder on another folder's plan. Only a run from this project is
+        // resumed without being named.
+        const QString here = QDir::currentPath();
+        auto mine = std::find_if(runs.cbegin(), runs.cend(), [&](const Crew::RunInfo& r) {
+            return !r.cwd.isEmpty() && QDir(r.cwd).absolutePath() == here;
+        });
+        if (mine == runs.cend()) {
+            err() << "no run from this folder to resume.\n"
+                  << "the most recent run belongs to " << (runs.first().cwd.isEmpty()
+                                                               ? QStringLiteral("an unknown folder")
+                                                               : runs.first().cwd)
+                  << ",\nso it is not resumed by default. name one explicitly:\n"
+                  << "  ollamadev crew resume " << runs.first().runId << "\n"
+                  << "or see them all:  ollamadev crew resume list\n";
+            err().flush();
+            return 1;
+        }
+        runId = mine->runId;
     }
     out() << "resuming " << runId << (replay ? " (replaying the saved plan)\n" : " (re-planning what's left)\n");
     out().flush();
@@ -3574,7 +3680,7 @@ int cmdCompletion(const QStringList& args) {
                  "            COMPREPLY=($(compgen -W 'list delete' -- \"${cur}\"))\n"
                  "            return 0 ;;\n"
                  "        crew)\n"
-                 "            COMPREPLY=($(compgen -W 'accept discard steer role pack clear' -- \"${cur}\"))\n"
+                 "            COMPREPLY=($(compgen -W 'accept discard steer role pack resume prune clear' -- \"${cur}\"))\n"
                  "            return 0 ;;\n"
                  "        terminal)\n"
                  "            COMPREPLY=($(compgen -W 'create spawn list attach start stop broadcast send delete log' -- \"${cur}\"))\n"
@@ -3955,6 +4061,7 @@ int main(int argc, char** argv) {
         if (sub == "role") return cmdCrewRole(rest.mid(1));
         if (sub == "pack") return cmdCrewPack(rest.mid(1));
         if (sub == "resume") return cmdCrewResume(rest.mid(1));
+        if (sub == "prune") return cmdCrewPrune(rest.mid(1));
         if (sub == "export") {
             // crew export [runId] [outfile] — a shareable Markdown record. No id ==
             // the newest run; no outfile == stdout.

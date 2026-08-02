@@ -201,6 +201,7 @@ TerminalInfo infoFrom(const QString& id, const QJsonObject& o) {
     t.shellPid = static_cast<qint64>(o.value(QStringLiteral("shellPid")).toDouble(-1));
     t.shellStart = static_cast<qint64>(o.value(QStringLiteral("shellStart")).toDouble(0));
     t.running = o.value(QStringLiteral("running")).toBool();
+    t.exited = o.value(QStringLiteral("exited")).toString();
     return t;
 }
 
@@ -217,7 +218,8 @@ QJsonObject recordFrom(const TerminalInfo& t) {
                        {QStringLiteral("hostStart"), static_cast<double>(t.hostStart)},
                        {QStringLiteral("shellPid"), static_cast<double>(t.shellPid)},
                        {QStringLiteral("shellStart"), static_cast<double>(t.shellStart)},
-                       {QStringLiteral("running"), t.running}};
+                       {QStringLiteral("running"), t.running},
+                       {QStringLiteral("exited"), t.exited}};
 }
 
 // Reconcile the record with reality: a host that died (crash, reboot, kill -9)
@@ -376,9 +378,24 @@ bool Terminals::start(const QString& id, QString* err) {
     // pty open — a pid alone only proves fork() worked.
     QElapsedTimer clock;
     clock.start();
+    // A host that started and has ALREADY finished is a success, not a failure.
+    // `spawn` runs one command, and a command can be quicker than this poll: it
+    // echoes, exits, the host tears the pty down, and running=false again before
+    // we ever look. Reporting "did not come up" there is simply wrong — it came
+    // up, did the job and left, with its output sitting in the log. Recording
+    // that we once saw a host pid is what tells the two cases apart.
+    // The record was written fresh above with no `exited` stamp, so any stamp we
+    // see now can only have come from the host we just launched.
     while (clock.elapsed() < kHostStartTimeoutMs) {
         const TerminalInfo now = infoFrom(id, readRecord(id));
         if (now.running && isOurHost(now.hostPid, now.hostStart, id)) {
+            markOwned(id);
+            return true;
+        }
+        if (!now.exited.isEmpty()) {
+            // Ran and finished inside the poll window. The caller reads the
+            // record for what to print, so it says "finished" rather than
+            // claiming something is running that is not.
             markOwned(id);
             return true;
         }
@@ -808,6 +825,9 @@ private:
         info_.hostStart = 0;
         info_.shellPid = -1;
         info_.shellStart = 0;
+        // Stamped before the pid is forgotten, so a spawner polling for
+        // readiness can still tell "ran and finished" from "never started".
+        info_.exited = QDateTime::currentDateTime().toString(Qt::ISODate);
         writeRecord(id_, recordFrom(info_));
 
         server_.close();

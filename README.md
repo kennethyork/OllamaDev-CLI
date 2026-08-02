@@ -164,6 +164,10 @@ python3 tests/lsp_probe.py ./build/cli/ollamadev
 # and runs offline; --prompt adds one real turn.
 python3 tests/acp_probe.py ./build/cli/ollamadev [--prompt]
 
+# Named terminals: pty lifecycle, argv pass-through to the wrapped program,
+# attach/detach over a real pty. No model, runs offline in seconds.
+python3 tests/terminal_probe.py ./build/cli/ollamadev
+
 # The crew's opt-in brains, end to end against a live model. EXPENSIVE — a full
 # pass runs six crews with parallel coders; use --only, and a small --model.
 python3 tests/crew_probe.py ./build/cli/ollamadev --only route

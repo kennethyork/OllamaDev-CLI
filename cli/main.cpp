@@ -3047,9 +3047,17 @@ int cmdTerminal(const QStringList& args) {
             err().flush();
             return 1;
         }
-        out() << "✓ " << t.id << " running (host pid " << t.hostPid << ", shell pid " << t.shellPid
-              << ")\n"
-              << "  attach: ollamadev terminal attach " << t.id << "\n";
+        // A spawned command can be quicker than the poll that waits for it, so
+        // say which of the two happened rather than always claiming "running" —
+        // and point at the log rather than an attach that would find nothing.
+        if (t.running) {
+            out() << "✓ " << t.id << " running (host pid " << t.hostPid << ", shell pid "
+                  << t.shellPid << ")\n"
+                  << "  attach: ollamadev terminal attach " << t.id << "\n";
+        } else {
+            out() << "✓ " << t.id << " finished already\n"
+                  << "  output: ollamadev terminal log " << t.id << "\n";
+        }
         out().flush();
         return 0;
     }

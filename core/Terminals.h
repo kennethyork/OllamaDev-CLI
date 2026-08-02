@@ -30,6 +30,11 @@ struct TerminalInfo {
     qint64 shellPid = -1;   // the pty child itself (the shell)
     qint64 shellStart = 0;
     bool running = false;
+    // ISO-8601, stamped by the host as it shuts down, and empty until then. It
+    // is the only durable evidence that a host ever ran: the host clears its own
+    // pid on the way out, so a `spawn` whose command finishes faster than the
+    // readiness poll would otherwise look identical to one that never started.
+    QString exited;
 
     bool isNull() const { return id.isEmpty(); }
 };

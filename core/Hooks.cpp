@@ -46,11 +46,13 @@ QString homePath() {
 }
 
 // The ONLY files a hook may be declared in. A repo-local ./.ollamadev.json is
-// absent by design — see the class comment in Hooks.h.
+// absent by design — see the class comment in Hooks.h. Both roots below are the
+// user's own configuration directories, never anything a cloned repository can
+// write, which is the property that keeps this list safe.
 QStringList trustedFiles() {
-    return {homePath() + QStringLiteral("/.ollamadev/config.json"),
-            homePath() + QStringLiteral("/.config/ollamadev/config.json"),
-            homePath() + QStringLiteral("/.ollamadev/ade-prefs.json")};
+    return {Config::homeDir() + QStringLiteral("/config.json"),
+            Config::configDir() + QStringLiteral("/config.json"),
+            Config::homeDir() + QStringLiteral("/ade-prefs.json")};
 }
 
 QJsonObject readJsonObject(const QString& path) {
@@ -498,7 +500,7 @@ namespace {
 // Project first, so a repo can override a personal command of the same name.
 QStringList cmdDirs() {
     return {QDir::current().filePath(QStringLiteral(".ollamadev/commands")),
-            homePath() + QStringLiteral("/.ollamadev/commands")};
+            Config::homeDir() + QStringLiteral("/commands")};
 }
 
 const QStringList& cmdExts() {

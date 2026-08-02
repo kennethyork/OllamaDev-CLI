@@ -75,6 +75,28 @@ QTextStream& err() {
     return s;
 }
 
+// Progress chatter — "writing a commit message…", "Indexing …". Under -q/--quiet
+// it goes to a sink instead of stdout, so a script gets only the output it asked
+// for. Errors never come through here: --quiet must not be able to hide a
+// failure, or it becomes a trap in a CI log.
+QTextStream& status() {
+    static QString sink;
+    static QTextStream discard(&sink);
+    if (!Tui::quiet()) return out();
+    sink.clear();  // bounded: a long run would otherwise accumulate every message
+    return discard;
+}
+
+// Extra detail, --verbose only. On stderr, so turning it on cannot corrupt output
+// that something downstream is parsing.
+QTextStream& detail() {
+    static QString sink;
+    static QTextStream discard(&sink);
+    if (Tui::verbose()) return err();
+    sink.clear();
+    return discard;
+}
+
 // An ANSI escape on the way to a terminal, and "" on the way to a pipe, a file
 // or a NO_COLOR shell. Every styled write below goes through one of these, so
 // `ollamadev diff | patch` and `ollamadev commit > log` stay clean bytes.
@@ -139,6 +161,24 @@ QStringList positionals(const QStringList& a) {
         out << t;
     }
     return out;
+}
+
+// Where the command word actually sits in argv. Needed because a flag may come
+// before it: `ollamadev --json models` is how everyone writes this, and dispatch
+// used to read args.first() — so it saw "--json", matched no command, and fell
+// through to the typo path, which then helpfully suggested `ollamadev models` to
+// someone who had just typed `models`. Returns -1 when there is no command.
+int commandIndex(const QStringList& a) {
+    const QStringList& takesValue = flagsTakingValue();
+    for (int i = 0; i < a.size(); ++i) {
+        const QString& t = a.at(i);
+        if (t.startsWith('-')) {
+            if (takesValue.contains(t)) ++i;
+            continue;
+        }
+        return i;
+    }
+    return -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -346,18 +386,29 @@ const QStringList& knownFlags() {
     static const QStringList v = [] {
         QStringList f{
             "-a",          "-c",           "-h",          "-m",          "-n",
-            "-v",          "-V",           "--all",       "--allow-writes", "--color",
-            "--comment",   "--continue",   "--debate",    "--dedupe",    "--dry-run",
-            "--force",     "--help",       "--install",   "--json",      "--keep",
-            "--learn",     "--new",        "--no-audit",  "--no-color",  "--no-research",
-            "--no-web",    "--once",       "--readonly",  "--replay",    "--review",
-            "--route",     "--run",        "--security",  "--version",   "--yes"};
+            "-q",          "-v",           "-V",          "--all",       "--allow-writes",
+            "--color",     "--comment",    "--continue",  "--debate",    "--dedupe",
+            "--dry-run",   "--force",      "--help",      "--install",   "--json",
+            "--keep",      "--learn",      "--new",       "--no-audit",  "--no-color",
+            "--no-research", "--no-web",   "--once",      "--quiet",     "--readonly",
+            "--replay",    "--review",     "--route",     "--run",       "--security",
+            "--verbose",   "--version",    "--yes"};
         // Anything that takes a value is a flag too; keeping one list avoids the
         // two drifting apart.
         f += flagsTakingValue();
         f.removeDuplicates();
         return f;
     }();
+    return v;
+}
+
+// Commands that actually emit JSON. --json is a global flag, so passing it to a
+// command that has no machine-readable form used to print the human table and
+// drop the flag silently — a script would parse that output and quietly get
+// nonsense. Naming the set lets the arg checker say so instead.
+const QStringList& jsonCommands() {
+    static const QStringList v{"backends", "crew",  "diff",      "eval", "memory",
+                               "models",   "scan",  "workspace", "ws"};
     return v;
 }
 
@@ -422,6 +473,17 @@ int checkFlags(const QString& cmd, const QStringList& args) {
         if (!guess.isEmpty()) err() << "did you mean " << guess << "?\n";
         err() << "run `ollamadev --help` for the full list, or put it after `--` to "
                  "send it as prompt text.\n";
+        err().flush();
+        return 2;
+    }
+
+    // --json is known everywhere, so the loop above accepts it everywhere. Say so
+    // when the command has no JSON form, rather than printing the human table and
+    // letting a script parse it as if the flag had worked.
+    if (args.contains(QStringLiteral("--json")) && !cmd.isEmpty() &&
+        !jsonCommands().contains(cmd)) {
+        err() << "--json is not supported by `" << cmd << "`\n"
+              << "commands that emit JSON: " << jsonCommands().join(QStringLiteral(", ")) << "\n";
         err().flush();
         return 2;
     }
@@ -586,6 +648,12 @@ void printHelp() {
           << "  --review                     hold everything for review instead of auto-applying\n"
           << "  --no-research, --no-audit\n"
           << "  --no-web                     block every network tool for this run\n"
+          << "  -q, --quiet                  drop the progress chatter; results and\n"
+          << "                               errors are never suppressed\n"
+          << "  --verbose                    report the resolved cwd, backend and model\n"
+          << "  --color, --no-color          force styling on/off, outranking NO_COLOR\n"
+          << "  --json                       machine-readable output, where a command has\n"
+          << "                               one; an error where it does not\n"
           << "  --focus \"<text>\"\n\n"
           << "A model tag belongs to one backend, so the --coder-* lists are positional:\n"
           << "  --coder-backends ollama,claude,codex --coder-models qwen3.5:9b,,\n"
@@ -742,6 +810,18 @@ int printManPage(const QString& outPath) {
       << "ollama, claude, codex, gemini, cursor\\-agent, opencode, qwen, aider, goose,\n"
       << "amp, crush or droid.\n"
       << ".TP\n.B \\-m, \\-\\-model \\fIname\\fP\nthe model to run.\n"
+      << ".TP\n.B \\-q, \\-\\-quiet\n"
+      << "drop the progress chatter, so a script's output is only what it asked for.\n"
+      << "Suppresses PROGRESS ONLY: results still print, and errors are never hidden.\n"
+      << ".TP\n.B \\-\\-verbose\n"
+      << "report the resolved working directory, backend, model and configuration\n"
+      << "directory before running. Written to standard error, so it cannot corrupt\n"
+      << "output something downstream is parsing. \\-\\-quiet wins if both are given.\n"
+      << ".TP\n.B \\-\\-json\n"
+      << "machine\\-readable output. Supported by\n"
+      << ".BR backends ,\n.BR crew ,\n.BR diff ,\n.BR eval ,\n.BR memory ,\n"
+      << ".BR models ,\n.BR scan\nand\n.BR ws ;\n"
+      << "on any other command it is an error rather than a silently ignored flag.\n"
       << ".TP\n.B \\-\\-new\nstart a fresh session instead of resuming this folder's.\n"
       << ".TP\n.B \\-\\-no\\-web\nblock every network tool for this run.\n"
       << ".TP\n.B \\-\\-\n"
@@ -763,12 +843,25 @@ int printManPage(const QString& outPath) {
       << ".B dumb\nsuppresses ANSI styling. stdout and stderr are judged separately, so\n"
       << "redirecting one keeps colour on the other.\n"
       << ".TP\n.B HOME\nlocates the configuration and state directories below.\n"
+      << ".TP\n.B OLLAMADEV_HOME\n"
+      << "overrides the state directory outright, whatever else is set.\n"
+      << ".TP\n.B XDG_DATA_HOME, XDG_CONFIG_HOME\n"
+      << "honoured for a fresh install, per the XDG base directory specification. A\n"
+      << "relative value is ignored, as the spec requires.\n"
       << ".SH FILES\n"
-      << ".TP\n.B ~/.ollamadev/ade\\-prefs.json\n"
+      << "The state directory is the first of these that applies:\n"
+      << ".BR $OLLAMADEV_HOME ,\n"
+      << "then\n.B ~/.ollamadev\nif it already exists, then\n"
+      << ".BR $XDG_DATA_HOME/ollamadev ,\n"
+      << "defaulting to\n.BR ~/.local/share/ollamadev .\n"
+      << "An installation that predates the XDG support keeps using\n.B ~/.ollamadev\n"
+      << "and nothing is ever moved. It is written\n.I <state>\nbelow.\n"
+      << ".TP\n.B <state>/ade\\-prefs.json\n"
       << "written by\n.BR \"ollamadev config set\" .\n"
-      << ".TP\n.B ~/.ollamadev/config.json\n"
-      << "the main configuration;\n.B ~/.config/ollamadev/config.json\nis also read.\n"
-      << ".TP\n.B ~/.ollamadev/\n"
+      << ".TP\n.B <state>/config.json\n"
+      << "the main configuration;\n.B $XDG_CONFIG_HOME/ollamadev/config.json\n"
+      << "(default\n.BR ~/.config/ollamadev/config.json )\nis also read.\n"
+      << ".TP\n.B <state>/\n"
       << "sessions, crew runs, the review board, the code index and memory.\n"
       << ".TP\n.B ./.ollamadev/agents/*.md\nproject\\-local subagent personas.\n"
       << ".TP\n.B ./evals/*.json\n"
@@ -805,7 +898,33 @@ int printManPage(const QString& outPath) {
     return f.error() == QFileDevice::NoError ? 0 : 1;
 }
 
-int cmdBackends() {
+int cmdBackends(const QStringList& args) {
+    // Machine-readable form: the numbers unformatted, so a setup script can ask
+    // "is anything installed?" without parsing a table built for human eyes.
+    if (hasFlag(args, "--json")) {
+        QJsonArray arr;
+        for (const auto& id : Backends::all()) {
+            auto b = Backends::get(id);
+            if (!b) continue;
+            const bool up = b->available();
+            QJsonObject o{{"id", id},
+                          {"label", Backends::labelFor(id)},
+                          {"installed", up},
+                          {"nativeTools", b->supportsNativeTools()}};
+            if (id == "ollama") {
+                o.insert(QStringLiteral("concurrencyLocal"), b->concurrencyLimit("qwen3.5:9b"));
+                o.insert(QStringLiteral("concurrencyCloud"),
+                         b->concurrencyLimit("gpt-oss:20b-cloud"));
+            } else {
+                o.insert(QStringLiteral("concurrency"), b->concurrencyLimit({}));
+            }
+            arr.append(o);
+        }
+        out() << QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)) << "\n";
+        out().flush();
+        return 0;
+    }
+
     out() << "Backend        Installed  Native tools  Concurrency\n";
     out() << "─────────────────────────────────────────────────────\n";
     for (const auto& id : Backends::all()) {
@@ -981,7 +1100,7 @@ int cmdCrew(const QStringList& args) {
 bool askYesNo(const QString& prompt);  // defined below, next to the other prompts
 
 int cmdUpdate(const QStringList& args) {
-    out() << "checking…\n";
+    status() << "checking…\n";
     out().flush();
     const UpdateInfo u = Update::check();
     if (!u.ok) {
@@ -1156,7 +1275,7 @@ int cmdTidy(const QStringList& args) {
 
     const QString backend = Config::str("model.backend", "ollama");
     const QString model = GitFlow::modelFor(Config::str("ollama.defaultModel", ""));
-    out() << "reading " << plan.steps.size() << " commits with " << model << "…\n";
+    status() << "reading " << plan.steps.size() << " commits with " << model << "…\n";
     out().flush();
 
     CancelToken cancel;
@@ -1430,6 +1549,28 @@ int cmdScan(const QStringList& args) {
     const auto findings = SecScan::scanTree(path, &files);
 
     int high = 0;
+    // JSON first: a scan in CI wants the findings as data, and the exit code is
+    // the same either way, so a pipeline can branch on the code and report from
+    // the payload.
+    if (hasFlag(args, "--json")) {
+        QJsonArray arr;
+        for (const auto& f : findings) {
+            if (f.severity == "high") ++high;
+            arr.append(QJsonObject{{"severity", f.severity},
+                                   {"rule", f.rule},
+                                   {"file", f.file},
+                                   {"line", f.line},
+                                   {"match", f.redacted}});
+        }
+        const QJsonObject o{{"path", path},
+                            {"filesScanned", files},
+                            {"findings", arr},
+                            {"high", high}};
+        out() << QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)) << "\n";
+        out().flush();
+        return high > 0 ? 1 : 0;
+    }
+
     for (const auto& f : findings) {
         if (f.severity == "high") ++high;
         out() << "  " << f.severity.leftJustified(5) << " " << f.rule.leftJustified(16) << " "
@@ -1735,7 +1876,7 @@ int cmdIndex(const QStringList& args) {
     }
 
     if (sub == "build") {
-        out() << "Indexing " << QDir::currentPath() << " with " << CodeIndex::model() << "…\n";
+        status() << "Indexing " << QDir::currentPath() << " with " << CodeIndex::model() << "…\n";
         out().flush();
         const BuildReport r = CodeIndex::build([](const QString& f, int done, int total) {
             out() << QStringLiteral("\r  %1/%2  %3").arg(done).arg(total).arg(f.left(50), -50);
@@ -2339,7 +2480,7 @@ int cmdCommit(const QStringList& args) {
     o.model = gitModel(args);
 
     if (o.message.isEmpty()) {
-        out() << co(ansi::kDim) << "writing a commit message…" << co(ansi::kReset) << "\n";
+        status() << co(ansi::kDim) << "writing a commit message…" << co(ansi::kReset) << "\n";
         out().flush();
     }
     // No Confirm: plain `commit` is not a remote-visible step, so it just commits.
@@ -2358,7 +2499,7 @@ int cmdShip(const QStringList& args) {
     o.model = gitModel(args);
 
     if (o.message.isEmpty()) {
-        out() << co(ansi::kDim) << "staging, scanning, writing a commit message…" << co(ansi::kReset)
+        status() << co(ansi::kDim) << "staging, scanning, writing a commit message…" << co(ansi::kReset)
               << "\n";
         out().flush();
     }
@@ -2413,7 +2554,7 @@ int cmdPr(const QStringList& args) {
             return 1;
         }
 
-        out() << co(ansi::kDim) << "drafting the PR…" << co(ansi::kReset) << "\n";
+        status() << co(ansi::kDim) << "drafting the PR…" << co(ansi::kReset) << "\n";
         out().flush();
         QString title, body;
         GitFlow::prText(commits, diff, gitBackend(args), GitFlow::modelFor(gitModel(args)), &title,
@@ -2469,7 +2610,7 @@ int cmdPr(const QStringList& args) {
             return 1;
         }
 
-        out() << co(ansi::kDim) << "reviewing PR #" << n << "…" << co(ansi::kReset) << "\n";
+        status() << co(ansi::kDim) << "reviewing PR #" << n << "…" << co(ansi::kReset) << "\n";
         out().flush();
         const PrReview rv =
             GitFlow::review(diff, gitBackend(args), GitFlow::modelFor(gitModel(args)),
@@ -2606,7 +2747,7 @@ int cmdVerify(const QStringList& args) {
         out().flush();
     };
     ev.onFixStart = [] {
-        out() << co(ansi::kDim) << "  asking the agent to fix…" << co(ansi::kReset) << " ";
+        status() << co(ansi::kDim) << "  asking the agent to fix…" << co(ansi::kReset) << " ";
         out().flush();
     };
     ev.onFixStep = [] {
@@ -3415,6 +3556,32 @@ int main(int argc, char** argv) {
     if (hasFlag(args, "--no-color")) Tui::setColorOverride(false);
     else if (hasFlag(args, "--color")) Tui::setColorOverride(true);
 
+    // Quiet wins when both are given: between hiding output and showing too much,
+    // the safe default for something running unattended is the quieter one, and a
+    // fixed rule beats depending on which flag came last in argv.
+    if (hasFlag(args, "--quiet") || hasFlag(args, "-q")) Tui::setVerbosity(Tui::Quiet);
+    else if (hasFlag(args, "--verbose")) Tui::setVerbosity(Tui::Verbose);
+
+    // What --verbose is actually for: the three things you want to know when a
+    // run did something you did not expect. Which tree did it act on, and which
+    // backend and model answered. On stderr, so it cannot corrupt piped output.
+    if (Tui::verbose()) {
+        detail() << ce(ansi::kDim) << "ollamadev " << ODV_VERSION << "\n"
+                 << "  cwd      " << QDir::currentPath() << "\n"
+                 << "  backend  "
+                 << flagValue(args, "--backend",
+                              Config::str(QStringLiteral("backend"), QStringLiteral("ollama")))
+                 << "\n"
+                 << "  model    "
+                 << flagValue(args, "--model",
+                              flagValue(args, "-m", Config::str(QStringLiteral("model"),
+                                                                QStringLiteral("(default)"))))
+                 << "\n"
+                 << "  config   " << Config::homeDir() << "\n"
+                 << ce(ansi::kReset);
+        detail().flush();
+    }
+
     // `help` is a command, not a prompt. It used to be neither: it fell through to
     // cmdOneShot, so the single most universal thing anyone types at an unfamiliar
     // CLI spent a model call being answered as a question ("Sure! What do you need
@@ -3482,8 +3649,14 @@ int main(int argc, char** argv) {
         return Repl(o).run();
     }
 
-    const QString cmd = args.first();
-    const QStringList rest = args.mid(1);
+    // The command word, wherever it sits. `rest` is everything else — flags that
+    // came BEFORE the command included, because subcommands read their own flags
+    // out of it and `ollamadev --json models` must reach cmdModels with --json
+    // still attached.
+    const int cmdAt = commandIndex(args);
+    const QString cmd = cmdAt >= 0 ? args.at(cmdAt) : QString();
+    QStringList rest = args;
+    if (cmdAt >= 0) rest.removeAt(cmdAt);
 
     // Must be early and must not fall through anything that prints: on the stdio
     // path `lsp` owns stdout the moment it starts.
@@ -3497,7 +3670,7 @@ int main(int argc, char** argv) {
     if (cmd == "code-search") return cmdCodeSearch(rest);
     if (cmd == "search") return cmdSearch(rest);
 
-    if (cmd == "backends") return cmdBackends();
+    if (cmd == "backends") return cmdBackends(rest);
     if (cmd == "agents") return cmdAgents(rest);
     if (cmd == "doctor") return cmdDoctor();
 
@@ -3623,6 +3796,18 @@ int main(int argc, char** argv) {
             err() << id << " is not available\n";
             err().flush();
             return 1;
+        }
+        // A bare `models --json` used to print the plain list and drop the flag on
+        // the floor — the exact silent no-op the arg checker exists to prevent.
+        if (jsonOut) {
+            QJsonArray arr;
+            for (const auto& m : b->models()) arr.append(m);
+            out() << QString::fromUtf8(
+                         QJsonDocument(QJsonObject{{"backend", id}, {"models", arr}})
+                             .toJson(QJsonDocument::Compact))
+                  << "\n";
+            out().flush();
+            return 0;
         }
         for (const auto& m : b->models()) out() << "  " << m << "\n";
         out().flush();

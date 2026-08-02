@@ -93,7 +93,7 @@ MemoryNote parseNote(const QString& path, const QString& slug) {
 }  // namespace
 
 QStringList Memory::baseDirs() {
-    QStringList d{projectDir(), homeRoot() + QStringLiteral("/.ollamadev/memory")};
+    QStringList d{projectDir(), Config::homeDir() + QStringLiteral("/memory")};
     d.removeDuplicates();
     return d;
 }

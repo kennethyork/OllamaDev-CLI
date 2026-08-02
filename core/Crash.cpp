@@ -93,7 +93,7 @@ void handler(int sig) {
 }
 
 QString logFilePath() {
-    return QDir::homePath() + QStringLiteral("/.ollamadev/last-crash.log");
+    return Config::homeDir() + QStringLiteral("/last-crash.log");
 }
 
 }  // namespace

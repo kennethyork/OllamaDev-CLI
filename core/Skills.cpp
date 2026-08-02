@@ -227,12 +227,12 @@ bool download(const QString& url, const QString& dest) {
 
 QStringList Skills::baseDirs() {
     QStringList d{projectRoot() + QStringLiteral("/.ollamadev/skills"),
-                  homeRoot() + QStringLiteral("/.ollamadev/skills")};
+                  Config::homeDir() + QStringLiteral("/skills")};
     d.removeDuplicates();
     return d;
 }
 
-QString Skills::homeDir() { return homeRoot() + QStringLiteral("/.ollamadev/skills"); }
+QString Skills::homeDir() { return Config::homeDir() + QStringLiteral("/skills"); }
 
 QVector<Skill> Skills::all() { return allIn(projectRoot()); }
 
@@ -245,7 +245,7 @@ QString Skills::catalogFor(const QString& root) {
 
 QVector<Skill> Skills::allIn(const QString& root) {
     QStringList bases{root + QStringLiteral("/.ollamadev/skills"),
-                      homeRoot() + QStringLiteral("/.ollamadev/skills")};
+                      Config::homeDir() + QStringLiteral("/skills")};
     // Enabled plugins go LAST: first writer wins below, so a plugin can add a
     // skill but can never shadow one you wrote yourself.
     bases += Plugins::skillDirs();
@@ -343,7 +343,7 @@ QString Skills::slugify(const QString& name) {
 
 // ---------------------------------------------------------------- registries
 
-QString Skills::registryDir() { return homeRoot() + QStringLiteral("/.ollamadev/registry"); }
+QString Skills::registryDir() { return Config::homeDir() + QStringLiteral("/registry"); }
 
 QStringList Skills::registries() {
     QStringList out{registryDir()};
@@ -1272,7 +1272,7 @@ QStringList CrewSkills::materialize(const QVector<SkillSpec>& skills, const QStr
         if (s.name.isEmpty()) continue;
         // A user's own skill of this name wins — never clobber a customised one.
         const QString mine =
-            home + QStringLiteral("/.ollamadev/skills/") + s.name + QStringLiteral("/SKILL.md");
+            Skills::homeDir() + '/' + s.name + QStringLiteral("/SKILL.md");
         if (QFileInfo::exists(mine)) {
             present << s.name;
             continue;
@@ -1348,7 +1348,7 @@ const QVector<CrewRole>& builtinRoles() {
 }  // namespace
 
 QString CrewRoles::dir() {
-    const QString d = homeRoot() + QStringLiteral("/.ollamadev/crew-roles");
+    const QString d = Config::homeDir() + QStringLiteral("/crew-roles");
     QDir().mkpath(d);
     return d;
 }
@@ -1455,7 +1455,7 @@ QString CrewRoles::persona(const QString& name) {
 // =============================================================== CrewPacks ===
 
 QString CrewPacks::dir() {
-    const QString d = homeRoot() + QStringLiteral("/.ollamadev/crew-packs");
+    const QString d = Config::homeDir() + QStringLiteral("/crew-packs");
     QDir().mkpath(d);
     return d;
 }

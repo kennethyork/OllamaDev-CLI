@@ -67,6 +67,21 @@ public:
     // the environment and config in charge.
     static void setColorOverride(bool on);
 
+    // How much the CLI says about what it is doing. -q/--quiet drops the progress
+    // chatter ("writing a commit message…") so a script's output is only the
+    // thing it asked for; --verbose adds the resolved backend, model and working
+    // directory before a run.
+    //
+    // Quiet suppresses PROGRESS ONLY. It never silences an error, and it never
+    // withholds the output the command exists to produce — a quiet `diff` still
+    // prints the diff, and a quiet `commit` that hits a leaked secret still says
+    // so. A flag that could hide a failure would be a trap in a CI log.
+    enum Verbosity { Quiet = -1, Normal = 0, Verbose = 1 };
+    static void setVerbosity(Verbosity v);
+    static Verbosity verbosity();
+    static bool quiet();    // verbosity() == Quiet
+    static bool verbose();  // verbosity() == Verbose
+
     // The escape when colour is on, "" when it is off — so a call site can stay a
     // one-liner: out() << paint(ansi::kGreen) << "✓" << paint(ansi::kReset).
     static const char* paint(const char* escape);

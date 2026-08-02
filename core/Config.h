@@ -36,10 +36,25 @@ public:
     // Persist to ade-prefs.json (flat dotted key). config.json is never written.
     static void setPref(const QString& dottedKey, const QJsonValue& value);
 
-    static QString homeDir();     // ~/.ollamadev
+    // Where this user's global state lives: sessions, crew runs, the board,
+    // terminals, prefs. Resolved in this order, and the first hit wins:
+    //
+    //   $OLLAMADEV_HOME          an explicit override, for tests and for anyone
+    //                            who wants their state somewhere specific
+    //   ~/.ollamadev             if it already exists — every install that
+    //                            predates the XDG support keeps working exactly
+    //                            as it did, and nothing is ever moved
+    //   $XDG_DATA_HOME/ollamadev the spec-compliant location for a fresh install,
+    //                            defaulting to ~/.local/share/ollamadev
+    static QString homeDir();
+
+    // $XDG_CONFIG_HOME/ollamadev, or ~/.config/ollamadev when it is unset. The
+    // secondary home for config.json; homeDir() is still searched first.
+    static QString configDir();
+
     static QString dataDir();     // <cwd>/.ollamadev  (per-project state)
-    static QString crewDir();     // ~/.ollamadev/crew
-    static QString boardDir();    // ~/.ollamadev/board
+    static QString crewDir();     // <homeDir>/crew
+    static QString boardDir();    // <homeDir>/board
     static QString terminalsDir();
 
 private:

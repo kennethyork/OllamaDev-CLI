@@ -137,6 +137,15 @@ bool colorAllowed() {
 
 void Tui::setColorOverride(bool on) { g_colorOverride = on ? 1 : 0; }
 
+namespace {
+Tui::Verbosity g_verbosity = Tui::Normal;
+}  // namespace
+
+void Tui::setVerbosity(Verbosity v) { g_verbosity = v; }
+Tui::Verbosity Tui::verbosity() { return g_verbosity; }
+bool Tui::quiet() { return g_verbosity == Quiet; }
+bool Tui::verbose() { return g_verbosity == Verbose; }
+
 bool Tui::colorEnabled() {
     if (g_colorOverride >= 0) return g_colorOverride == 1;
     return colorAllowed() && stdoutIsTty();

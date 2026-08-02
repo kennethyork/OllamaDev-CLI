@@ -1618,6 +1618,145 @@ static void testManPage() {
     check(bad.code != 0, "an unwritable --out is an error, not a silent empty page");
 }
 
+// Dispatch read args.first(), so a flag written before the command hid it:
+// `ollamadev --json models` matched no command, fell through to the typo path,
+// and suggested `ollamadev models` to someone who had just typed models. Every
+// mainstream CLI takes global flags on either side of the subcommand.
+static void testFlagsBeforeCommand() {
+    const CliRun before = runCli({"--json", "models"});
+    const CliRun after = runCli({"models", "--json"});
+    check(before.code == 0, "a flag before the command still finds the command");
+    check(!before.err.contains(QStringLiteral("unknown command")),
+          "…and does not report the command it was given as unknown");
+    check(before.out == after.out, "…and means exactly the same as the flag after it");
+
+    // The flag has to REACH the subcommand, not merely be tolerated by dispatch.
+    check(before.out.trimmed().startsWith('{'), "…with the flag actually applied");
+
+    for (const char* f : {"--no-color", "--verbose", "-q"}) {
+        const CliRun r = runCli({QString::fromLatin1(f), "backends"});
+        check(r.code == 0, QByteArray(f) + " before the command works too");
+    }
+}
+
+// -q/--quiet and --verbose. The contract that matters: quiet drops PROGRESS only.
+// A flag that could hide a failure would be a trap in a CI log.
+static void testVerbosity() {
+    const CliRun normal = runCli({"backends"});
+    const CliRun quiet = runCli({"-q", "backends"});
+    check(quiet.code == 0 && !quiet.out.isEmpty(),
+          "--quiet still prints the output the command exists to produce");
+    check(quiet.out == normal.out, "…unchanged: it suppresses progress, not results");
+
+    // Errors must survive quiet, or a silent failure looks like success.
+    const CliRun quietErr = runCli({"-q", "--nonsense"});
+    check(quietErr.code == 2, "--quiet still fails on a bad flag");
+    check(!quietErr.err.isEmpty(), "…and still says why, on stderr");
+
+    // --verbose reports the resolved environment on STDERR, so turning it on
+    // cannot corrupt output something downstream is parsing.
+    const CliRun verbose = runCli({"--verbose", "backends"});
+    check(verbose.out == normal.out, "--verbose leaves stdout byte-for-byte alone");
+    for (const char* field : {"cwd", "backend", "model", "config"})
+        check(verbose.err.contains(QLatin1String(field)),
+              QByteArray("--verbose reports the resolved ") + field);
+
+    // Both at once has to be deterministic rather than argv-order dependent.
+    const CliRun both = runCli({"--quiet", "--verbose", "backends"});
+    check(both.err.isEmpty() || !both.err.contains(QStringLiteral("cwd")),
+          "--quiet wins when both are given");
+}
+
+// --json is a global flag, so it used to be accepted everywhere and honoured only
+// in a few places: `doctor --json` printed the human table and dropped the flag,
+// which a script would then parse as though it had worked.
+static void testJsonCoverage() {
+    for (const char* cmd : {"backends", "models"}) {
+        const CliRun r = runCli({QString::fromLatin1(cmd), "--json"});
+        check(r.code == 0, QByteArray(cmd) + " --json succeeds");
+        QJsonParseError e{};
+        QJsonDocument::fromJson(r.out.toUtf8(), &e);
+        check(e.error == QJsonParseError::NoError,
+              QByteArray(cmd) + " --json emits parseable JSON");
+    }
+
+    // A command with no JSON form must say so rather than pretend.
+    const CliRun unsupported = runCli({"doctor", "--json"});
+    check(unsupported.code == 2, "--json on a command that has none exits 2");
+    check(unsupported.err.contains(QStringLiteral("not supported")),
+          "…and says the flag is unsupported there");
+    check(unsupported.err.contains(QStringLiteral("backends")),
+          "…and lists the commands that do emit JSON");
+    check(unsupported.out.isEmpty(),
+          "…and prints nothing to stdout, so a parser sees no half-answer");
+}
+
+// State used to live in ~/.ollamadev unconditionally. It now follows the XDG base
+// directory spec for a fresh install — but an existing ~/.ollamadev keeps working
+// untouched, because migrating it is how you lose somebody's sessions.
+//
+// The order under test is: $OLLAMADEV_HOME, then an existing ~/.ollamadev, then
+// $XDG_DATA_HOME/ollamadev, then ~/.local/share/ollamadev.
+static void testXdgPaths() {
+    // `doctor` prints the resolved directory, which is the only way to observe
+    // this from outside the process.
+    const auto resolved = [](const QString& home, const QStringList& env) {
+        QProcess p;
+        p.setProgram(QStringLiteral(ODV_CLI_BIN));
+        p.setArguments({QStringLiteral("doctor")});
+        QProcessEnvironment e = QProcessEnvironment::systemEnvironment();
+        e.remove(QStringLiteral("XDG_DATA_HOME"));
+        e.remove(QStringLiteral("OLLAMADEV_HOME"));
+        e.insert(QStringLiteral("HOME"), home);
+        for (int i = 0; i + 1 < env.size(); i += 2) e.insert(env.at(i), env.at(i + 1));
+        p.setProcessEnvironment(e);
+        p.start();
+        if (!p.waitForStarted(5000) || !p.waitForFinished(30000)) {
+            p.kill();
+            return QString();
+        }
+        const QStringList lines = QString::fromUtf8(p.readAllStandardOutput()).split('\n');
+        for (const QString& l : lines)
+            if (l.startsWith(QStringLiteral("config"))) return l.section(' ', 1).trimmed();
+        return QString();
+    };
+
+    QTemporaryDir fresh, legacyHome, xdg, explicitDir;
+    if (!fresh.isValid() || !legacyHome.isValid() || !xdg.isValid() || !explicitDir.isValid()) {
+        check(false, "temp dirs for the XDG test");
+        return;
+    }
+    // A pre-existing ~/.ollamadev is what marks an install as legacy.
+    QDir().mkpath(legacyHome.filePath(QStringLiteral(".ollamadev")));
+
+    check(resolved(fresh.path(), {}) ==
+              fresh.filePath(QStringLiteral(".local/share/ollamadev")),
+          "a fresh install lands in ~/.local/share/ollamadev");
+
+    check(resolved(fresh.path(), {QStringLiteral("XDG_DATA_HOME"), xdg.path()}) ==
+              xdg.filePath(QStringLiteral("ollamadev")),
+          "XDG_DATA_HOME is honoured");
+
+    // The spec says a relative XDG_DATA_HOME is invalid and must be ignored.
+    check(resolved(fresh.path(), {QStringLiteral("XDG_DATA_HOME"), QStringLiteral("rel/ative")}) ==
+              fresh.filePath(QStringLiteral(".local/share/ollamadev")),
+          "a relative XDG_DATA_HOME is ignored, per the spec");
+
+    check(resolved(legacyHome.path(), {QStringLiteral("XDG_DATA_HOME"), xdg.path()}) ==
+              legacyHome.filePath(QStringLiteral(".ollamadev")),
+          "an existing ~/.ollamadev keeps winning — nothing is migrated");
+
+    check(resolved(legacyHome.path(), {QStringLiteral("XDG_DATA_HOME"), xdg.path(),
+                                       QStringLiteral("OLLAMADEV_HOME"), explicitDir.path()}) ==
+              explicitDir.path(),
+          "OLLAMADEV_HOME overrides everything");
+
+    // A fresh install must not resurrect the legacy directory as a side effect —
+    // that would silently flip every later run back onto the legacy branch.
+    check(!QFileInfo::exists(fresh.filePath(QStringLiteral(".ollamadev"))),
+          "…and a fresh install never creates ~/.ollamadev");
+}
+
 // Colour was controllable only by environment or config. A flag is what a script
 // reaches for, and --color has to force colour back ON for pipes that do render
 // escapes (less -R, CI logs) — so it overrides the not-a-tty test in both
@@ -1746,6 +1885,10 @@ int main(int argc, char** argv) {
     s << "completions\n"; s.flush(); testCompletionsCoverEveryCommand();
     s << "color-flags\n"; s.flush(); testColorFlags();
     s << "man\n";        s.flush(); testManPage();
+    s << "xdg\n";        s.flush(); testXdgPaths();
+    s << "argorder\n";   s.flush(); testFlagsBeforeCommand();
+    s << "verbosity\n";  s.flush(); testVerbosity();
+    s << "json\n";       s.flush(); testJsonCoverage();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";
     s.flush();

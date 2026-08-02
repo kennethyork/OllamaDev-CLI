@@ -22,7 +22,7 @@ Needs a C++20 compiler, CMake ≥ 3.21, and Qt6 (Core/Network/Concurrent).
 # or, manually:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
-./build/tests/odv-tests   # 276 assertions
+./build/tests/odv-tests   # 307 assertions
 ./build/cli/ollamadev --version
 ```
 
@@ -61,8 +61,19 @@ ollamadev -- status of the release    # `--` forces prompt text, not a command
 - **Exit codes.** `0` success · `1` the command ran and reported a problem (no
   index, a leaked secret, tests red) · `2` the command line itself was wrong.
 - **Nothing is ignored in silence.** An unrecognised flag or subcommand is an
-  error with a suggestion. Flags after `git`, `mcp` and `terminal` belong to the
-  program being wrapped and are passed straight through.
+  error with a suggestion. `--json` on a command that has no JSON form is an
+  error too, rather than a flag that quietly does nothing. Flags after `git`,
+  `mcp` and `terminal` belong to the program being wrapped and are passed
+  straight through.
+- **Flags go on either side.** `ollamadev --json models` and `ollamadev models
+  --json` are the same command.
+- **`-q` for scripts, `--verbose` for debugging.** Quiet drops the progress
+  chatter and nothing else — results still print and errors are never hidden.
+  Verbose reports the resolved cwd, backend and model, on stderr.
+- **XDG paths.** A fresh install stores state in `$XDG_DATA_HOME/ollamadev`
+  (default `~/.local/share/ollamadev`) and reads config from
+  `$XDG_CONFIG_HOME/ollamadev`. An existing `~/.ollamadev` keeps working
+  untouched — nothing is migrated. `OLLAMADEV_HOME` overrides all of it.
 - **Help is local and specific.** `ollamadev help` lists every command,
   `ollamadev help <cmd>` (or `<cmd> --help`) documents just that one. No model
   call is involved, so it works offline and costs nothing. `man ollamadev` is

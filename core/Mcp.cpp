@@ -70,10 +70,9 @@ constexpr int kRpcTimeoutMs = 30000;
 // or the primary path if none exists yet. Writing blindly to ~/.ollamadev/config.json
 // would shadow a config at ~/.config/ollamadev and silently orphan the user's file.
 QString configPath() {
-    const QString home = QDir::homePath();
     const QStringList paths{
-        home + QStringLiteral("/.ollamadev/config.json"),
-        home + QStringLiteral("/.config/ollamadev/config.json"),
+        Config::homeDir() + QStringLiteral("/config.json"),
+        Config::configDir() + QStringLiteral("/config.json"),
         QDir::current().filePath(QStringLiteral(".ollamadev.json")),
     };
     for (const QString& p : paths)

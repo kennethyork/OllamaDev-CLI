@@ -72,8 +72,7 @@ AgentDef parseFile(const QString& file) {
 QStringList personaDirs() {
     QStringList dirs;
     dirs << QDir::currentPath() + QStringLiteral("/.ollamadev/agents");
-    const QString home = QDir::homePath();
-    if (!home.isEmpty()) dirs << home + QStringLiteral("/.ollamadev/agents");
+    dirs << Config::homeDir() + QStringLiteral("/agents");
     dirs.removeDuplicates();
     return dirs;
 }
@@ -185,13 +184,9 @@ namespace {
 // line is read from the HOME config (and ade-prefs) ONLY — never from the merged
 // config that layers the project file in. This mirrors PHP's Config::trustedGet.
 QString homeStatuslineRaw() {
-    const QString home = QDir::homePath();
-    QStringList files;
-    if (!home.isEmpty()) {
-        files << home + QStringLiteral("/.ollamadev/config.json")
-              << home + QStringLiteral("/.config/ollamadev/config.json")
-              << home + QStringLiteral("/.ollamadev/ade-prefs.json");
-    }
+    const QStringList files{Config::homeDir() + QStringLiteral("/config.json"),
+                            Config::configDir() + QStringLiteral("/config.json"),
+                            Config::homeDir() + QStringLiteral("/ade-prefs.json")};
     for (const QString& path : files) {
         QFile f(path);
         if (!f.exists() || !f.open(QIODevice::ReadOnly)) continue;

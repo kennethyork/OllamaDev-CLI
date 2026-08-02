@@ -10,6 +10,8 @@
 
 #include "Plugins.h"
 
+#include "Config.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -119,7 +121,7 @@ QString Plugin::capabilities() const {
 }
 
 QString Plugins::dir() {
-    return QDir::homePath() + QStringLiteral("/.ollamadev/plugins");
+    return Config::homeDir() + QStringLiteral("/plugins");
 }
 
 QVector<Plugin> Plugins::all() {

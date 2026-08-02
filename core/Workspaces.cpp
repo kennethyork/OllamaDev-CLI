@@ -25,7 +25,7 @@ namespace odv {
 namespace {
 
 QString storePath() {
-    return QDir::homePath() + QStringLiteral("/.ollamadev/workspaces.json");
+    return Config::homeDir() + QStringLiteral("/workspaces.json");
 }
 
 // ~ expands; a path that does not exist yet is kept AS TYPED rather than being

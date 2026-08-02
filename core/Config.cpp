@@ -48,7 +48,15 @@ QString homePath() {
 }
 
 QString prefsFile() {
-    return homePath() + QStringLiteral("/.ollamadev/ade-prefs.json");
+    return Config::homeDir() + QStringLiteral("/ade-prefs.json");
+}
+
+// $XDG_CONFIG_HOME/ollamadev, or ~/.config/ollamadev when it is unset. A relative
+// XDG_CONFIG_HOME is required by the spec to be ignored.
+QString xdgConfigDir() {
+    const QString xdg = envStr("XDG_CONFIG_HOME");
+    if (!xdg.isEmpty() && xdg.startsWith(u'/')) return xdg + QStringLiteral("/ollamadev");
+    return homePath() + QStringLiteral("/.config/ollamadev");
 }
 
 QJsonObject readJsonObject(const QString& path) {
@@ -173,8 +181,8 @@ void Config::load() {
     // still runs both sees one configuration.
     QJsonObject fileCfg;
     const QStringList paths{
-        homePath() + QStringLiteral("/.ollamadev/config.json"),
-        homePath() + QStringLiteral("/.config/ollamadev/config.json"),
+        Config::homeDir() + QStringLiteral("/config.json"),
+        xdgConfigDir() + QStringLiteral("/config.json"),
         QDir::current().filePath(QStringLiteral(".ollamadev.json")),
     };
     for (const QString& p : paths) {
@@ -276,9 +284,29 @@ void Config::setPref(const QString& dottedKey, const QJsonValue& value) {
     merged_ = json::mergeDeep(merged_, json::expandDotted(one));
 }
 
+// Deliberately not cached. It is tempting — this runs on nearly every path
+// lookup — but the answer depends on $HOME, and a static would freeze whichever
+// value happened to be current at the first call. The tests redirect HOME to a
+// temporary directory precisely so they never touch the real one, and a cache
+// silently defeated that. A stat() on a path the caller is about to open anyway
+// is not worth the risk.
 QString Config::homeDir() {
-    return homePath() + QStringLiteral("/.ollamadev");
+    const QString override = envStr("OLLAMADEV_HOME");
+    if (!override.isEmpty()) return override;
+
+    // An existing ~/.ollamadev keeps its contents and its meaning. Migrating it
+    // would be the kind of change that loses somebody's sessions, and being
+    // spec-compliant is not worth that.
+    const QString legacy = homePath() + QStringLiteral("/.ollamadev");
+    if (QFileInfo::exists(legacy)) return legacy;
+
+    // A relative XDG_DATA_HOME is required by the spec to be ignored.
+    const QString xdg = envStr("XDG_DATA_HOME");
+    if (!xdg.isEmpty() && xdg.startsWith(u'/')) return xdg + QStringLiteral("/ollamadev");
+    return homePath() + QStringLiteral("/.local/share/ollamadev");
 }
+
+QString Config::configDir() { return xdgConfigDir(); }
 
 QString Config::dataDir() {
     const QString dir = str(QStringLiteral("data.directory"), QStringLiteral(".ollamadev"));

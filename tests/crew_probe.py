@@ -37,19 +37,18 @@ Where the work happens is yours to choose:
 
 --model and --backend are expanded here into the PER-ROLE flags
 (--coder-model, --director-model, --auditor-model, --researcher-model, and the
-matching --*-backend). They are not passed as -m/--backend, because the crew
-option builder does not read those: they sit in the global Options block and
-nothing on this path parses them, so `crew "task" -m X` ignores X entirely and
-every role falls back to config. A run that looks pinned to a cloud model may
-only be landing there because the configured default happens to be one.
+matching --*-backend), which are the most explicit way to say it and leave
+nothing to inherit. `crew -m X` now works too — it did not until recently, when
+the crew option builder read neither flag and every role quietly fell back to
+config, so a run could look pinned to a model it was never going to use.
 
 `route` ignores all of it by design — choosing the model IS its job, and it will
-reach for a local one whatever you pass. That is why --require-cloud watches
-what Ollama actually loads instead of trusting any of the above.
+reach for a local one whatever you pass. That, and the fact that the "obviously
+correct" flag turned out to do nothing for months, is why --require-cloud
+watches what Ollama actually loads rather than trusting any of the above.
 
-Exercised so far: route (3 checks), security (7), learn (5). The dedupe,
-dedupe-negative and board sections are written but have not yet been run
-end to end.
+Every section has now been run end to end and passes: route (3 checks),
+security (7), learn (5), dedupe (4), dedupe-negative (2), board (6).
 """
 import argparse
 import glob
@@ -85,9 +84,11 @@ class LocalModelGuard:
     """Abort the moment Ollama loads a model that is not a cloud tag.
 
     --require-cloud exists because reasoning about where inference will happen
-    turned out to be unreliable: the obvious flag for it (-m) is not read by the
-    crew path at all, so runs that looked pinned to a cloud model were only
-    landing there because the user's configured default happened to be one.
+    turned out to be unreliable: the obvious flag for it (-m) was read by nothing
+    on the crew path, so runs that looked pinned to a cloud model were only
+    landing there because the configured default happened to be one. That is
+    fixed, but the lesson is that the guarantee should not rest on my reading of
+    the resolution order.
 
     This does not reason. It polls `ollama ps` and looks at what is actually
     resident. A tag without "cloud" in it is running on this machine's GPU, and
@@ -283,10 +284,6 @@ DISJOINT_TASK = ("add a docstring to lookup() in svc.py, and add a README.md "
 
 
 def probe_dedupe(e):
-    # NOT YET RUN end to end. The behaviour it asserts was verified by hand —
-    # two same-content files are held with "duplicates coder #N" — but these
-    # exact assertions have not been executed. Treat a failure here as possibly
-    # the probe's fault until it has passed once.
     e.reset()
     e.seed({"svc.py": VULN_SRC})
     rc, out, err = e.run("crew", "--dedupe", DUP_TASK, "--max", "2")
@@ -303,7 +300,6 @@ def probe_dedupe(e):
 
 def probe_dedupe_negative(e):
     """A dedupe that holds everything is worse than one that holds nothing."""
-    # NOT YET RUN end to end — see probe_dedupe.
     e.reset()
     e.seed({"svc.py": VULN_SRC})
     rc, out, err = e.run("crew", "--dedupe", DISJOINT_TASK, "--max", "2")
@@ -327,9 +323,6 @@ def probe_route(e):
 
 def probe_board(e):
     """accept/discard round trip: one lands, one is thrown away."""
-    # NOT YET RUN end to end — see probe_dedupe. The round trip itself was
-    # verified by hand: accept applied a changeset, discard dropped one, and the
-    # board emptied.
     e.reset()
     e.seed({"svc.py": VULN_SRC})
     rc, out, err = e.run("crew", "--review", DISJOINT_TASK, "--max", "2")
@@ -339,9 +332,28 @@ def probe_board(e):
     check(held >= 1, "board: --review holds the work instead of applying it", board[:160])
     if held < 1:
         return
-    before = set(os.listdir(e.work))
+    # Hash the tree, do not just list it: a changeset that adds a docstring
+    # MODIFIES a file and creates none, so comparing directory listings reports
+    # a perfectly good accept as having done nothing.
+    def snapshot():
+        out = {}
+        for root, dirs, files in os.walk(e.work):
+            dirs[:] = [d for d in dirs if d not in (".git", ".ollamadev")]
+            for f in files:
+                p = os.path.join(root, f)
+                try:
+                    out[os.path.relpath(p, e.work)] = open(p, "rb").read()
+                except OSError:
+                    pass
+        return out
+
+    before = snapshot()
     check(e.run("crew", "accept", "1", timeout=300)[0] == 0, "board: accept applies a changeset")
-    check(set(os.listdir(e.work)) != before, "board: …and the files actually appear")
+    after = snapshot()
+    added = set(after) - set(before)
+    changed = {k for k in set(after) & set(before) if after[k] != before[k]}
+    check(bool(added or changed), "board: …and the work actually lands in the tree",
+          f"added={sorted(added)} modified={sorted(changed)}")
     if held >= 2:
         check(e.run("crew", "discard", "2", timeout=300)[0] == 0, "board: discard drops one")
     rc, board, _ = e.run("board", timeout=120)

@@ -22,7 +22,7 @@ Needs a C++20 compiler, CMake ≥ 3.21, and Qt6 (Core/Network/Concurrent).
 # or, manually:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
-./build/tests/odv-tests   # 257 assertions
+./build/tests/odv-tests   # 276 assertions
 ./build/cli/ollamadev --version
 ```
 
@@ -42,6 +42,7 @@ ollamadev doctor                # health check
 
 ollamadev help                  # every command, one line each
 ollamadev help crew             # …or just one, in full (same as `crew --help`)
+man ollamadev                   # the manual (installed by install.sh / the packages)
 
 git diff | ollamadev "review this"    # piped stdin is appended to the prompt
 ollamadev -- status of the release    # `--` forces prompt text, not a command
@@ -64,7 +65,9 @@ ollamadev -- status of the release    # `--` forces prompt text, not a command
   program being wrapped and are passed straight through.
 - **Help is local and specific.** `ollamadev help` lists every command,
   `ollamadev help <cmd>` (or `<cmd> --help`) documents just that one. No model
-  call is involved, so it works offline and costs nothing.
+  call is involved, so it works offline and costs nothing. `man ollamadev` is
+  the same material as a manual page — generated from the same table at build
+  time, so it cannot describe a command surface the binary does not have.
 - **Colour on demand.** `--no-color` and `--color` outrank the environment;
   `--color` forces styling back on for pipes that render it, like `less -R`.
 

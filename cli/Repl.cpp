@@ -769,7 +769,7 @@ QString Repl::cmdHelp() const {
     o += QLatin1Char('\n') + dim(QStringLiteral("  Session")) + QLatin1Char('\n');
     o += row(QStringLiteral("/cd · /ls · /pwd"), QStringLiteral("navigate the working directory"));
     o += row(QStringLiteral("/save · /session"), QStringLiteral("save / show the current session"));
-    o += row(QStringLiteral("/clear · /exit"), QStringLiteral("clear the screen / quit"));
+    o += row(QStringLiteral("/clear · /exit"), QStringLiteral("clear the screen / quit (/quit too)"));
     o += QLatin1Char('\n') +
          dim(QStringLiteral("  Tab completes commands, paths and model names. Ctrl-C interrupts a "
                             "response.")) +

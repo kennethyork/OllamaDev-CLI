@@ -254,7 +254,7 @@
       <h3>How it behaves in a shell</h3>
       <div class="cmd"><code>working directory</code><span>Every command acts on the folder you ran it in. If that folder is a bookmarked workspace it is also published as active, so the desktop app follows along — but the CLI never moves itself. Set <code>workspace.follow true</code> to opt in to the old desktop-style behaviour of following the active project from anywhere.</span></div>
       <div class="cmd"><code>colour</code><span>ANSI styling only when the stream is a terminal. Honours <code>NO_COLOR</code>, <code>TERM=dumb</code> and <code>ui.color false</code>; stdout and stderr are judged separately, so redirecting one keeps colour on the other. <code>--no-color</code> and <code>--color</code> outrank all of it — <code>--color</code> forces styling back on for pipes that render it, like <code>less -R</code>.</span></div>
-      <div class="cmd"><code>help</code><span><code>ollamadev help</code> lists every command with a one-liner; <code>ollamadev help &lt;cmd&gt;</code> — or the identical <code>&lt;cmd&gt; --help</code> — documents just that one, with its own flags and subcommands. Answered locally, so it works offline and never spends a model call.</span></div>
+      <div class="cmd"><code>help</code><span><code>ollamadev help</code> lists every command with a one-liner; <code>ollamadev help &lt;cmd&gt;</code> — or the identical <code>&lt;cmd&gt; --help</code> — documents just that one, with its own flags and subcommands. Answered locally, so it works offline and never spends a model call. <code>man ollamadev</code> is the same material as a manual page, generated at build time from the same table.</span></div>
       <div class="cmd"><code>exit codes</code><span><code>0</code> success · <code>1</code> the command ran and reported a problem (no index, a leaked secret, tests red) · <code>2</code> the command line itself was wrong.</span></div>
       <div class="cmd"><code>unknown input</code><span>A flag or subcommand that is not recognised is an error with a suggestion, never a silent no-op. Flags after <code>git</code>, <code>mcp</code> and <code>terminal</code> belong to the program being wrapped and are passed through untouched.</span></div>
     </div>
@@ -338,6 +338,7 @@
       <div class="cmd"><code>tidy [N]</code><span>An AI rebase plan for the last N commits (default 10).</span></div>
       <div class="cmd"><code>update</code><span>Check for a newer release and install it (also <code>upgrade</code>).</span></div>
       <div class="cmd"><code>help [&lt;cmd&gt;]</code><span>Every command with a one-liner, or one command in full. Never a model call.</span></div>
+      <div class="cmd"><code>man [--out &lt;file&gt;]</code><span>Print the manual as roff. The build generates and installs <code>ollamadev.1</code> from this, so <code>man ollamadev</code> and <code>--help</code> cannot disagree.</span></div>
     </div>
 
     <div class="note">

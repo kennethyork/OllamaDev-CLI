@@ -1556,6 +1556,68 @@ static void testCompletionsCoverEveryCommand() {
     check(zsh.out.contains(QStringLiteral("'\\''")), "zsh blurbs escape their apostrophes");
 }
 
+// The man page is generated from the command table rather than checked in, so
+// these assertions are what stops it drifting from the binary. groff is not a
+// build dependency, so the roff is checked structurally here instead.
+static void testManPage() {
+    const CliRun man = runCli({"man"});
+    check(man.code == 0 && !man.out.isEmpty(), "`man` prints a page");
+    check(man.out.startsWith(QStringLiteral(".TH OLLAMADEV 1")), "…starting with a .TH header");
+
+    for (const char* section : {".SH NAME", ".SH SYNOPSIS", ".SH DESCRIPTION", ".SH COMMANDS",
+                                ".SH OPTIONS", ".SH EXIT STATUS", ".SH ENVIRONMENT", ".SH FILES",
+                                ".SH EXAMPLES", ".SH SEE ALSO"})
+        check(man.out.contains(QLatin1String(section)),
+              QByteArray("…and a ") + (section + 4) + " section");
+
+    // Raw UTF-8 makes troff warn on every continuation byte, so the generator
+    // spells the typography as roff glyphs. Nothing non-ASCII may survive.
+    for (const QChar c : man.out)
+        if (c.unicode() > 127) {
+            check(false, "the man page is pure ASCII (roff glyphs, not raw UTF-8)");
+            break;
+        }
+    check(man.out.contains(QStringLiteral("\\(em")), "…em dashes are roff glyphs");
+
+    // Every command must be documented, which is the whole point of generating it.
+    const CliRun index = runCli({"help"});
+    QStringList missing;
+    const QStringList lines = index.out.split('\n');
+    for (const QString& line : lines) {
+        if (!line.startsWith(QStringLiteral("  ")) || line.startsWith(QStringLiteral("   ")))
+            continue;
+        const QString name = line.trimmed().section(' ', 0, 0);
+        if (name.isEmpty() || name.startsWith('-')) continue;
+        // Names go through the same hyphen escaping the page does, so `code-search`
+        // is looked for as `code\-search`.
+        QString roff = name;
+        roff.replace(QStringLiteral("-"), QStringLiteral("\\-"));
+        if (!man.out.contains(QStringLiteral(".B ollamadev ") + roff)) missing << name;
+    }
+    check(missing.isEmpty(),
+          "the man page documents every command (missing: " + missing.join(',').toUtf8() + ")");
+
+    // The version in the header has to be the real one, or a packaged page claims
+    // to describe a release it does not.
+    const CliRun ver = runCli({"--version"});
+    const QString v = ver.out.trimmed().section(' ', -1);
+    check(!v.isEmpty() && man.out.contains(QStringLiteral("\"OllamaDev ") + v + '"'),
+          "…and its header carries the running version");
+
+    // --out is what the build uses; a silent failure there would ship an empty
+    // page, so it must report what happened.
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("ollamadev.1"));
+    const CliRun toFile = runCli({"man", "--out", path});
+    check(toFile.code == 0, "`man --out <file>` succeeds");
+    QFile f(path);
+    check(f.open(QIODevice::ReadOnly), "…and creates the file");
+    check(QString::fromUtf8(f.readAll()) == man.out, "…with exactly what stdout would have got");
+
+    const CliRun bad = runCli({"man", "--out", QStringLiteral("/nonexistent-dir/x.1")});
+    check(bad.code != 0, "an unwritable --out is an error, not a silent empty page");
+}
+
 // Colour was controllable only by environment or config. A flag is what a script
 // reaches for, and --color has to force colour back ON for pipes that do render
 // escapes (less -R, CI logs) — so it overrides the not-a-tty test in both
@@ -1683,6 +1745,7 @@ int main(int argc, char** argv) {
     s << "help\n";       s.flush(); testHelpIsACommand();
     s << "completions\n"; s.flush(); testCompletionsCoverEveryCommand();
     s << "color-flags\n"; s.flush(); testColorFlags();
+    s << "man\n";        s.flush(); testManPage();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";
     s.flush();

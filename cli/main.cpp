@@ -260,6 +260,11 @@ const QVector<CommandDoc>& commandDocs() {
         {"lsp", "[--port N]", "language server — completion, hover, go-to-def, diagnostics",
          "Real diagnostics via php -l, py_compile, go vet, gcc, rustc. stdio by\n"
          "default; --port serves TCP instead."},
+        {"man", "[--out <file>]", "print this manual as a roff man page",
+         "Written to stdout unless --out names a file. The build generates and\n"
+         "installs ollamadev.1 from this, so `man ollamadev` and `--help` can never\n"
+         "disagree.\n\n"
+         "  ollamadev man | man -l -    read it without installing anything"},
         {"mcp", "serve | list | add <name> <cmd…> | remove <name>",
          "expose these tools to any MCP client, or call someone else's",
          "  mcp serve [--allow-writes]   speak MCP on stdio\n"
@@ -630,6 +635,174 @@ int printCommandIndex() {
     out() << "\nRun `ollamadev --help` for the grouped overview.\n";
     out().flush();
     return 0;
+}
+
+// ------------------------------------------------------------------ man page
+//
+// Generated from the same table as --help and the completions, so the installed
+// page cannot describe a command surface the binary does not have. CMake runs
+// `ollamadev man --out …` at build time and installs the result; there is no
+// checked-in roff to go stale.
+
+// roff reads some characters as markup. A backslash starts an escape, and a line
+// whose first character is '.' or '\'' is a control line — a blurb beginning with
+// one would silently vanish. Hyphens become \- so that options stay copyable out
+// of the rendered page as real minus signs.
+// Order matters: the backslash rule has to run before anything that introduces a
+// backslash, and the hyphen rule before \(-> which contains one.
+QString roffEscape(const QString& s) {
+    QString r = s;
+    r.replace(QLatin1String("\\"), QLatin1String("\\e"));
+    r.replace(QLatin1String("-"), QLatin1String("\\-"));
+    // The blurbs are prose and use real typography. Raw UTF-8 makes troff warn on
+    // every continuation byte, so spell these as roff glyphs. Each stays one
+    // column wide, which matters: the detail blocks are hand-aligned, and "..."
+    // for the ellipsis would shift every column after it by two.
+    r.replace(QString::fromUtf8("—"), QLatin1String("\\(em"));
+    r.replace(QString::fromUtf8("→"), QLatin1String("\\(->"));
+    r.replace(QString::fromUtf8("·"), QLatin1String("\\(pc"));
+    r.replace(QString::fromUtf8("…"), QLatin1String("\\[u2026]"));
+    return r;
+}
+
+// A preformatted block: the detail text is hand-aligned into columns, so it has
+// to survive with its spacing intact rather than being re-filled as a paragraph.
+void roffPre(QTextStream& s, const QString& text) {
+    s << ".nf\n";
+    const QStringList lines = text.split('\n');
+    for (const QString& line : lines) {
+        const QString esc = roffEscape(line);
+        // Guard the control-line characters at column 0.
+        if (esc.startsWith('.') || esc.startsWith('\'')) s << "\\&";
+        s << esc << "\n";
+    }
+    s << ".fi\n";
+}
+
+int printManPage(const QString& outPath) {
+    QString buf;
+    QTextStream s(&buf);
+
+    // No build date in the .TH: it would change on every rebuild for no reason
+    // and make the output unreproducible. The version is the useful stamp.
+    s << ".TH OLLAMADEV 1 \"\" \"OllamaDev " << ODV_VERSION << "\" \"User Commands\"\n"
+      << ".SH NAME\n"
+      << "ollamadev \\- local\\-first AI coding agent for your terminal\n"
+      << ".SH SYNOPSIS\n"
+      << ".B ollamadev\n.RI [ options ]\n.br\n"
+      << ".B ollamadev\n.RI \\(dq prompt \\(dq\n.RI [ options ]\n.br\n"
+      << ".B ollamadev\n.I command\n.RI [ args ]\n.RI [ options ]\n.br\n"
+      << ".B ollamadev\n.B \\-\\-\n.I prompt\n"
+      << ".SH DESCRIPTION\n"
+      << "Talks to Ollama by default, and can drive every major coding CLI \\(em claude,\n"
+      << "codex, gemini, cursor\\-agent, opencode, qwen, aider, goose, amp, crush, droid\n"
+      << "\\(em behind one interface. No GUI and no telemetry: your code stays on your\n"
+      << "machine unless you point it at a cloud model yourself.\n"
+      << ".PP\n"
+      << "With no arguments it opens an interactive session, resuming this folder's most\n"
+      << "recent one. With a quoted prompt it runs a single agent turn and exits. Piped\n"
+      << "stdin is appended to the prompt, so\n"
+      << ".B git diff | ollamadev \\(dqreview this\\(dq\n"
+      << "works.\n"
+      << ".PP\n"
+      << "Every command acts on the directory you ran it in. If that directory is a\n"
+      << "bookmarked workspace it is also published as active so the desktop app follows\n"
+      << "along, but the CLI never relocates itself; set\n"
+      << ".B workspace.follow true\n"
+      << "to opt in to following the active project from anywhere.\n"
+      << ".SH COMMANDS\n";
+
+    for (const CommandDoc& d : commandDocs()) {
+        const QString args = QString::fromUtf8(d.args);
+        s << ".TP\n.B ollamadev " << roffEscape(QString::fromUtf8(d.name));
+        if (!args.isEmpty()) s << " \\fR" << roffEscape(args) << "\\fP";
+        s << "\n" << roffEscape(QString::fromUtf8(d.blurb)) << "\n";
+        const QString detail = QString::fromUtf8(d.detail);
+        if (!detail.isEmpty()) {
+            s << ".RS\n.PP\n";
+            roffPre(s, detail);
+            s << ".RE\n";
+        }
+    }
+
+    s << ".TP\n.B ollamadev help \\fR[\\fIcommand\\fR]\\fP\n"
+      << "every command with a one\\-line summary, or one command in full. Answered\n"
+      << "locally \\(em no model call, so it works offline.\n"
+      << ".SH OPTIONS\n"
+      << ".TP\n.B \\-h, \\-\\-help\n"
+      << "show help. After a command name it shows that command's page instead of the\n"
+      << "whole surface.\n"
+      << ".TP\n.B \\-v, \\-V, \\-\\-version\nprint the version and exit.\n"
+      << ".TP\n.B \\-\\-color, \\-\\-no\\-color\n"
+      << "force ANSI styling on or off, outranking\n.BR NO_COLOR ,\n"
+      << ".B TERM\nand\n.BR ui.color .\n"
+      << ".B \\-\\-color\nalso overrides the not\\-a\\-terminal test, for pipes that do render\n"
+      << "escapes such as\n.BR \"less \\-R\" .\n"
+      << ".TP\n.B \\-\\-backend \\fIid\\fP\n"
+      << "ollama, claude, codex, gemini, cursor\\-agent, opencode, qwen, aider, goose,\n"
+      << "amp, crush or droid.\n"
+      << ".TP\n.B \\-m, \\-\\-model \\fIname\\fP\nthe model to run.\n"
+      << ".TP\n.B \\-\\-new\nstart a fresh session instead of resuming this folder's.\n"
+      << ".TP\n.B \\-\\-no\\-web\nblock every network tool for this run.\n"
+      << ".TP\n.B \\-\\-\n"
+      << "end of options: everything after it is prompt text, never a command and never\n"
+      << "a flag. Quoting cannot do this \\(em the shell strips quotes, so\n"
+      << ".B ollamadev \\(dqstatus\\(dq\n"
+      << "and\n.B ollamadev status\n"
+      << "arrive as the same argv.\n"
+      << ".SH EXIT STATUS\n"
+      << ".TP\n.B 0\nsuccess.\n"
+      << ".TP\n.B 1\n"
+      << "the command ran and reported a problem: no index, a leaked secret, tests red.\n"
+      << ".TP\n.B 2\n"
+      << "the command line itself was wrong \\(em an unknown flag or subcommand. Nothing\n"
+      << "is ignored in silence; the error names a likely correction.\n"
+      << ".SH ENVIRONMENT\n"
+      << ".TP\n.B NO_COLOR\nif set to anything, suppresses ANSI styling.\n"
+      << ".TP\n.B TERM\n"
+      << ".B dumb\nsuppresses ANSI styling. stdout and stderr are judged separately, so\n"
+      << "redirecting one keeps colour on the other.\n"
+      << ".TP\n.B HOME\nlocates the configuration and state directories below.\n"
+      << ".SH FILES\n"
+      << ".TP\n.B ~/.ollamadev/ade\\-prefs.json\n"
+      << "written by\n.BR \"ollamadev config set\" .\n"
+      << ".TP\n.B ~/.ollamadev/config.json\n"
+      << "the main configuration;\n.B ~/.config/ollamadev/config.json\nis also read.\n"
+      << ".TP\n.B ~/.ollamadev/\n"
+      << "sessions, crew runs, the review board, the code index and memory.\n"
+      << ".TP\n.B ./.ollamadev/agents/*.md\nproject\\-local subagent personas.\n"
+      << ".TP\n.B ./evals/*.json\n"
+      << "your own eval tasks;\n.B ./.ollamadev/evals\nis also read.\n"
+      << ".SH EXAMPLES\n"
+      << ".TP\n.B ollamadev setup\ndetect the hardware, recommend and pull a model.\n"
+      << ".TP\n.B git diff | ollamadev \\(dqreview this\\(dq\n"
+      << "pipe the diff in as context for a one\\-shot review.\n"
+      << ".TP\n.B ollamadev crew \\(dqadd a \\-\\-json flag to export\\(dq \\-\\-max 4\n"
+      << "run four coders in parallel, each in its own git worktree.\n"
+      << ".TP\n.B ollamadev eval \\-\\-min 80\n"
+      << "score the model against the task suite and exit 1 below 80%.\n"
+      << ".TP\n.B ollamadev completion bash >> ~/.bashrc\ninstall tab completion.\n"
+      << ".SH SEE ALSO\n"
+      << ".BR git (1),\n.BR ollama (1)\n.PP\n"
+      << "Full documentation and the command reference:\n"
+      << ".UR https://github.com/kennethyork/OllamaDev\\-CLI\n.UE\n"
+      << ".SH LICENSE\n"
+      << "AGPL\\-3.0\\-or\\-later.\n";
+    s.flush();
+
+    if (outPath.isEmpty()) {
+        out() << buf;
+        out().flush();
+        return 0;
+    }
+    QFile f(outPath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        err() << "cannot write " << outPath << ": " << f.errorString() << "\n";
+        err().flush();
+        return 1;
+    }
+    f.write(buf.toUtf8());
+    return f.error() == QFileDevice::NoError ? 0 : 1;
 }
 
 int cmdBackends() {
@@ -3430,6 +3603,7 @@ int main(int argc, char** argv) {
 
     if (cmd == "config") return cmdConfig(rest);
     if (cmd == "completion") return cmdCompletion(rest);
+    if (cmd == "man") return printManPage(flagValue(rest, "--out"));
     if (cmd == "chat") return cmdChat(rest);
     if (cmd == "load") return cmdLoad(rest);
     if (cmd == "resume") return cmdResume(rest);

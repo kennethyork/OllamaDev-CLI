@@ -24,6 +24,16 @@ cmake --install build --prefix "$PREFIX" >/dev/null
 echo
 echo "installed:"
 echo "  $PREFIX/bin/ollamadev        $("$PREFIX/bin/ollamadev" --version)"
+echo "  $PREFIX/share/man/man1/ollamadev.1"
+
+# ~/.local/share/man is on the default MANPATH for most man implementations, but
+# not all of them — say so rather than let `man ollamadev` mysteriously miss.
+if ! MANPATH="" man -w ollamadev >/dev/null 2>&1; then
+    echo
+    echo "NOTE: man cannot find the page yet. Add this to ~/.bashrc:"
+    echo "        export MANPATH=\"$PREFIX/share/man:\$MANPATH\""
+    echo "      or read it directly:  ollamadev man | man -l -"
+fi
 
 case ":$PATH:" in
     *":$PREFIX/bin:"*) ;;

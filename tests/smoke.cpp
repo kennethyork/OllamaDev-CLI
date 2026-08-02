@@ -1761,6 +1761,47 @@ static void testJsonCoverage() {
           "…and prints nothing to stdout, so a parser sees no half-answer");
 }
 
+// A positional value beginning with a dash had no way through at all. The flag
+// checker rejected `config set k -1` as an unknown option, and `--` was always
+// read as "prompt text follows", so `config set k -- -1` sent "-1" to the model.
+// A negative number was simply not expressible. After a command, `--` now means
+// POSIX end-of-options; with no command it still forces prompt text.
+static void testEndOfOptions() {
+    QTemporaryDir home;
+    if (!home.isValid()) {
+        check(false, "temp HOME for the end-of-options test");
+        return;
+    }
+    const auto cli = [&](const QStringList& a) { return runCli(a, {}, home.path()); };
+
+    for (const char* v : {"-1", "-0.5", "-Wall", "--fast"}) {
+        const QString value = QString::fromLatin1(v);
+        const CliRun set = cli({"config", "set", "t.v", "--", value});
+        check(set.code == 0, QByteArray("config set … -- ") + v + " succeeds");
+        check(cli({"config", "get", "t.v"}).out.trimmed() == value,
+              QByteArray("…and the value round-trips as ") + v);
+    }
+
+    // Without the --, it is still an error — but one that names the escape hatch
+    // that actually applies to a command, not the prompt one.
+    const CliRun bare = cli({"config", "set", "t.v", "-1"});
+    check(bare.code == 2, "a dash-leading value without -- is still rejected");
+    check(bare.err.contains(QStringLiteral("-- -1")),
+          "…and the error shows the -- form that would work");
+    check(!bare.err.contains(QStringLiteral("did you mean")),
+          "…and does not guess a flag for a number");
+
+    // A real typo must still get its suggestion.
+    check(cli({"models", "--jsn"}).err.contains(QStringLiteral("did you mean --json")),
+          "a genuine flag typo is still corrected");
+
+    // With no command, -- keeps meaning prompt text: `-- backends` asks the model
+    // about backends rather than running the command.
+    const CliRun prompt = cli({"--", "backends"});
+    check(!prompt.out.contains(QStringLiteral("Native tools")),
+          "with no command, -- still forces prompt text rather than running it");
+}
+
 // Several commands dispatched their known subcommands and let everything else
 // fall through to a default: `index buidl` reported the index status, `agents foo`
 // listed every agent. Both look like they worked, which is the silent no-op this
@@ -1987,6 +2028,7 @@ int main(int argc, char** argv) {
     s << "verbosity\n";  s.flush(); testVerbosity();
     s << "json\n";       s.flush(); testJsonCoverage();
     s << "subcmds\n";    s.flush(); testUnknownSubcommands();
+    s << "endopts\n";    s.flush(); testEndOfOptions();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";
     s.flush();

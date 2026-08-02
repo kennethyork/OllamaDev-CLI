@@ -22,7 +22,7 @@ Needs a C++20 compiler, CMake ≥ 3.21, and Qt6 (Core/Network/Concurrent).
 # or, manually:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
-./build/tests/odv-tests   # 366 assertions
+./build/tests/odv-tests   # 379 assertions
 ./build/cli/ollamadev --version
 ```
 
@@ -67,6 +67,10 @@ ollamadev -- status of the release    # `--` forces prompt text, not a command
   straight through.
 - **Flags go on either side.** `ollamadev --json models` and `ollamadev models
   --json` are the same command.
+- **`--` means two things, by position.** With no command it forces prompt text
+  (`ollamadev -- status of the release`). After a command it is POSIX
+  end-of-options, so a value can start with a dash:
+  `ollamadev config set retry.delay -- -1`.
 - **`-q` for scripts, `--verbose` for debugging.** Quiet drops the progress
   chatter and nothing else — results still print and errors are never hidden.
   Verbose reports the resolved cwd, backend and model, on stderr.

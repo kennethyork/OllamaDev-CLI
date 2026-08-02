@@ -8,6 +8,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#include <algorithm>
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -175,7 +177,9 @@ QStringList positionals(const QStringList& a) {
 //
 // NOT applied to the pass-through commands: `git log --oneline` is git's argv and
 // its order is git's business.
-QStringList positionalsFirst(const QStringList& a) {
+// `extraPositionals` are the tokens that followed a `--`. They join the end of the
+// positional run — never the flag run — however many dashes they begin with.
+QStringList positionalsFirst(const QStringList& a, const QStringList& extraPositionals = {}) {
     const QStringList& takesValue = flagsTakingValue();
     QStringList pos, flags;
     for (int i = 0; i < a.size(); ++i) {
@@ -187,7 +191,7 @@ QStringList positionalsFirst(const QStringList& a) {
         }
         pos << t;
     }
-    return pos + flags;
+    return pos + extraPositionals + flags;
 }
 
 // Where the command word actually sits in argv. Needed because a flag may come
@@ -503,10 +507,25 @@ int checkFlags(const QString& cmd, const QStringList& args) {
             continue;
         }
         err() << "unknown option: " << t << "\n";
-        const QString guess = nearest(t, known);
+        // Only guess when there is a word to guess at. A negative number is one
+        // edit away from half the short flags, so `-1` used to be answered with
+        // "did you mean -a?" — a suggestion that is worse than silence, because it
+        // sends you looking for a typo you did not make.
+        const bool hasLetter =
+            std::any_of(t.cbegin(), t.cend(), [](QChar c) { return c.isLetter(); });
+        const QString guess = hasLetter ? nearest(t, known) : QString();
         if (!guess.isEmpty()) err() << "did you mean " << guess << "?\n";
-        err() << "run `ollamadev --help` for the full list, or put it after `--` to "
-                 "send it as prompt text.\n";
+        // The escape hatch differs by form, and naming the wrong one is worse than
+        // naming none: after a command, `--` makes the rest positional arguments,
+        // which is how a value beginning with a dash gets through.
+        if (cmd.isEmpty())
+            err() << "run `ollamadev --help` for the full list, or put it after `--` to "
+                     "send it as prompt text.\n";
+        else
+            err() << "run `ollamadev help " << cmd
+                  << "` for its options, or put it after `--` to pass it as a value: "
+                     "ollamadev "
+                  << cmd << " … -- " << t << "\n";
         err().flush();
         return 2;
     }
@@ -588,6 +607,8 @@ void printHelp() {
           << "  ollamadev                    interactive chat (auto-resumes this folder; --new for fresh)\n"
           << "  ollamadev \"<prompt>\"        one-shot agent turn (stdin is appended if piped)\n"
           << "  ollamadev -- <prompt>        …when the prompt looks like a command or a flag\n"
+          << "  ollamadev <cmd> … -- <arg>   after a command, `--` ends the options: the\n"
+          << "                               rest are values, dashes and all\n"
           << "  ollamadev backends           which providers are installed and how wide they run\n"
           << "  ollamadev models             list models on the active backend\n"
           << "  ollamadev models presets|cloud|chain [--json]   curated catalog + fallback chain\n"
@@ -859,11 +880,22 @@ int printManPage(const QString& outPath) {
       << ".TP\n.B \\-\\-new\nstart a fresh session instead of resuming this folder's.\n"
       << ".TP\n.B \\-\\-no\\-web\nblock every network tool for this run.\n"
       << ".TP\n.B \\-\\-\n"
-      << "end of options: everything after it is prompt text, never a command and never\n"
-      << "a flag. Quoting cannot do this \\(em the shell strips quotes, so\n"
+      << "What follows depends on whether a command came first.\n"
+      << ".RS\n.PP\n"
+      << "With no command it is prompt text, never a command and never a flag \\(em\n"
+      << ".B ollamadev \\-\\- status of the release\n"
+      << "asks the model about status rather than running the command it resembles.\n"
+      << "Quoting cannot do this job, because the shell strips quotes, so\n"
       << ".B ollamadev \\(dqstatus\\(dq\n"
       << "and\n.B ollamadev status\n"
       << "arrive as the same argv.\n"
+      << ".PP\n"
+      << "After a command it is POSIX end\\-of\\-options: the remaining words are that\n"
+      << "command's positional arguments, whatever they begin with. This is how a value\n"
+      << "starting with a dash gets through \\(em\n"
+      << ".B ollamadev config set retry.delay \\-\\- \\-1\n"
+      << "stores \\-1 rather than reporting an unknown option.\n"
+      << ".RE\n"
       << ".SH EXIT STATUS\n"
       << ".TP\n.B 0\nsuccess.\n"
       << ".TP\n.B 1\n"
@@ -3625,12 +3657,27 @@ int main(int argc, char** argv) {
     // wrong here` is a prompt rather than an unknown option. Quoting cannot do
     // this job: the shell strips the quotes, so `ollamadev "status"` and
     // `ollamadev status` arrive as the same argv.
-    QStringList forcedPrompt;
+    QStringList afterDashDash;
     const int endOfOpts = args.indexOf(QStringLiteral("--"));
     if (endOfOpts >= 0) {
-        forcedPrompt = args.mid(endOfOpts + 1);
+        afterDashDash = args.mid(endOfOpts + 1);
         args = args.mid(0, endOfOpts);
     }
+
+    // What the tail means depends on whether a command precedes it.
+    //
+    // With no command it is prompt text, which is what `--` was added for:
+    // `ollamadev -- status of the release` asks the model about status instead of
+    // running the command it resembles.
+    //
+    // With a command it is POSIX end-of-options: the remaining words are that
+    // command's positional arguments, whatever they begin with. Without this there
+    // was no way at all to pass a value starting with a dash — `config set k -1`
+    // was rejected as an unknown option, and `config set k -- -1` sent "-1" to the
+    // model. A negative number was simply not expressible.
+    const bool tailIsPrompt = afterDashDash.isEmpty() || commandIndex(args) < 0;
+    const QStringList forcedPrompt = tailIsPrompt ? afterDashDash : QStringList();
+    const QStringList endOfOptsArgs = tailIsPrompt ? QStringList() : afterDashDash;
 
     // Colour is otherwise only controllable by environment (NO_COLOR, TERM) or
     // config. A flag is what a script reaches for, and --color forces it back on
@@ -3740,9 +3787,11 @@ int main(int argc, char** argv) {
     const QString cmd = cmdAt >= 0 ? args.at(cmdAt) : QString();
     QStringList rest = args;
     if (cmdAt >= 0) rest.removeAt(cmdAt);
-    // Normalised so a leading global flag cannot be mistaken for the subcommand.
-    // The pass-through commands keep their argv exactly as typed.
-    if (!forwardsUnknownArgs(cmd)) rest = positionalsFirst(rest);
+    // Normalised so a leading global flag cannot be mistaken for the subcommand,
+    // with anything after a `--` joining the positionals. The pass-through
+    // commands keep their argv exactly as typed.
+    if (forwardsUnknownArgs(cmd)) rest += endOfOptsArgs;
+    else rest = positionalsFirst(rest, endOfOptsArgs);
 
     // Must be early and must not fall through anything that prints: on the stdio
     // path `lsp` owns stdout the moment it starts.

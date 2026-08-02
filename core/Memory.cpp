@@ -42,10 +42,6 @@ bool writeText(const QString& path, const QString& text) {
     return f.commit();
 }
 
-QString homeRoot() {
-    const QString h = qEnvironmentVariable("HOME");
-    return h.isEmpty() ? QDir::tempPath() : h;
-}
 
 // Thread-local for a crew coder (its sandbox), the process cwd otherwise — the
 // same rule the tools use, so a coder's notes are its own.

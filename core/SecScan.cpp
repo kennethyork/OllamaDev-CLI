@@ -109,9 +109,12 @@ void scanLine(const QString& line, int lineNo, QVector<Finding>& out) {
     for (int i = 0; i < rules().size(); ++i) {
         const QRegularExpressionMatch m = res.at(i).match(line);
         if (!m.hasMatch()) continue;
+        // `file` is left empty on purpose: a text or diff scan already knows what
+        // it was reading, and only scanTree can fill it in. Spelled out so it
+        // reads as a decision rather than an omission.
         out.push_back(Finding{QString::fromLatin1(rules().at(i).id),
                               QString::fromLatin1(rules().at(i).severity), lineNo,
-                              redact(m.captured(0))});
+                              redact(m.captured(0)), /*file=*/QString()});
     }
 }
 

@@ -22,7 +22,7 @@ Needs a C++20 compiler, CMake ≥ 3.21, and Qt6 (Core/Network/Concurrent).
 # or, manually:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
-./build/tests/odv-tests   # 379 assertions
+./build/tests/odv-tests   # 386 assertions
 ./build/cli/ollamadev --version
 ```
 
@@ -137,8 +137,34 @@ the denominator, so the rate measures the model rather than the box.
 ```
 core/    the engine — agent loop, tools, crew, backends, git, MCP, LSP, …
 cli/     the CLI + REPL (main.cpp, Repl.cpp)
-tests/   smoke suite (odv-tests)
+tests/   smoke suite (odv-tests) + the argv fuzzer
 ```
+
+## Checking it
+
+```sh
+./build/tests/odv-tests          # 386 assertions
+
+# Sanitizers — the suite drives the real binary, so the CLI paths are covered too.
+cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+cmake --build build-asan -j"$(nproc)" && ASAN_OPTIONS=detect_leaks=0 ./build-asan/tests/odv-tests
+
+# Fuzz the argument parser. Random command lines from a hostile vocabulary;
+# asserts it terminates, does not crash, exits 0/1/2, and prints nothing to
+# stdout when it rejects the line. Run it against the sanitized binary.
+python3 tests/fuzz_argv.py ./build-asan/cli/ollamadev 250 <seed>
+
+# Drive the language server over stdio: handshake, hover, go-to-def,
+# completion, clean shutdown. Needs no editor.
+python3 tests/lsp_probe.py ./build/cli/ollamadev
+```
+
+The suite enumerates commands from `ollamadev help` rather than a list of its
+own, so the per-command invariants — help exists, `help X` == `X --help`, global
+flags mean the same on either side, a rejected line writes nothing to stdout —
+automatically cover any command added later.
 
 ## License
 

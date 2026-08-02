@@ -1761,6 +1761,83 @@ static void testJsonCoverage() {
           "…and prints nothing to stdout, so a parser sees no half-answer");
 }
 
+// Invariants that must hold for EVERY command, enumerated from `ollamadev help`
+// rather than from a list kept here — so a command added tomorrow is swept
+// tomorrow, without anyone remembering to add it.
+//
+// These started as a throwaway shell sweep. A sweep that runs once proves the
+// state of one afternoon; the same checks in the suite prove it on every build,
+// which is the only version worth having.
+static QStringList allCommands() {
+    QStringList out;
+    const QStringList lines = runCli({"help"}).out.split('\n');
+    for (const QString& line : lines) {
+        // The index is exactly two spaces, the name, then padding.
+        if (!line.startsWith(QStringLiteral("  ")) || line.startsWith(QStringLiteral("   ")))
+            continue;
+        const QString name = line.trimmed().section(' ', 0, 0);
+        if (!name.isEmpty() && !name.startsWith('-')) out << name;
+    }
+    return out;
+}
+
+static void testEveryCommandInvariants() {
+    const QStringList commands = allCommands();
+    check(commands.size() >= 47, "the help index enumerates the whole command surface");
+
+    QStringList noHelp, wrongUsage, formsDiffer, dumpedGlobal;
+    for (const QString& c : commands) {
+        const CliRun viaWord = runCli({"help", c});
+        const CliRun viaFlag = runCli({c, "--help"});
+
+        if (viaWord.code != 0 || viaFlag.code != 0) noHelp << c;
+        if (!viaWord.out.startsWith(QStringLiteral("Usage: ollamadev ") + c)) wrongUsage << c;
+        if (viaWord.out != viaFlag.out) formsDiffer << c;
+        // The whole point of per-command help is NOT reciting the grouped overview.
+        if (viaWord.out.contains(QStringLiteral("Crew — the parallel bench"))) dumpedGlobal << c;
+    }
+    check(noHelp.isEmpty(), "every command has help that exits 0 (bad: " + noHelp.join(',').toUtf8() + ")");
+    check(wrongUsage.isEmpty(),
+          "every command's help opens with its own usage line (bad: " + wrongUsage.join(',').toUtf8() + ")");
+    check(formsDiffer.isEmpty(),
+          "`help X` and `X --help` agree for every command (bad: " + formsDiffer.join(',').toUtf8() + ")");
+    check(dumpedGlobal.isEmpty(),
+          "no command's help dumps the global overview (bad: " + dumpedGlobal.join(',').toUtf8() + ")");
+
+    // Global flags must work on either side of the command, for every command
+    // that can be run without a model or a network round-trip.
+    const QStringList safe{"board",  "stats",   "agents", "hooks", "commands",
+                           "help",   "man",     "skills", "memory", "ws"};
+    QStringList positionMismatch;
+    for (const QString& c : safe) {
+        for (const char* f : {"--no-color", "-q", "--verbose"}) {
+            const QString flag = QString::fromLatin1(f);
+            const CliRun pre = runCli({flag, c});
+            const CliRun post = runCli({c, flag});
+            if (pre.code != post.code || pre.out != post.out)
+                positionMismatch << (c + QLatin1Char('/') + flag);
+        }
+    }
+    check(positionMismatch.isEmpty(),
+          "a global flag means the same before and after the command (bad: " +
+              positionMismatch.join(',').toUtf8() + ")");
+
+    // A rejected command line must print nothing to stdout — otherwise something
+    // parsing the output sees a half-answer and an error code it may not check.
+    QStringList leaked;
+    const QVector<QStringList> badLines{{QStringLiteral("--nonsense")},
+                                        {QStringLiteral("help"), QStringLiteral("comit")},
+                                        {QStringLiteral("index"), QStringLiteral("bogus")},
+                                        {QStringLiteral("agents"), QStringLiteral("bogus")},
+                                        {QStringLiteral("doctor"), QStringLiteral("--json")},
+                                        {QStringLiteral("config"), QStringLiteral("get")}};
+    for (const QStringList& line : badLines) {
+        const CliRun r = runCli(line);
+        if (r.code == 2 && !r.out.isEmpty()) leaked << line.join(' ');
+    }
+    check(leaked.isEmpty(), "a rejected line writes nothing to stdout (bad: " + leaked.join(';').toUtf8() + ")");
+}
+
 // A positional value beginning with a dash had no way through at all. The flag
 // checker rejected `config set k -1` as an unknown option, and `--` was always
 // read as "prompt text follows", so `config set k -- -1` sent "-1" to the model.
@@ -2029,6 +2106,7 @@ int main(int argc, char** argv) {
     s << "json\n";       s.flush(); testJsonCoverage();
     s << "subcmds\n";    s.flush(); testUnknownSubcommands();
     s << "endopts\n";    s.flush(); testEndOfOptions();
+    s << "invariants\n"; s.flush(); testEveryCommandInvariants();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";
     s.flush();

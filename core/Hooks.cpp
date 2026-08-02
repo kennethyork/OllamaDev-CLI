@@ -40,10 +40,6 @@ constexpr int kTimedOut = 124;       // shell convention: timeout(1)
 constexpr int kDefaultTimeoutMs = 30000;
 constexpr int kMaxResultBytes = 4000;  // how much tool output a PostToolUse hook sees
 
-QString homePath() {
-    const QString h = QDir::homePath();
-    return h.isEmpty() ? QStringLiteral("/tmp") : h;
-}
 
 // The ONLY files a hook may be declared in. A repo-local ./.ollamadev.json is
 // absent by design — see the class comment in Hooks.h. Both roots below are the

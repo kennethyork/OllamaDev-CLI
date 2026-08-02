@@ -360,8 +360,76 @@ def probe_board(e):
     check("nothing pending" in board, "board: the queue is empty afterwards")
 
 
+def probe_amplify(e):
+    """N director plans, modal pick, N-reviewer panel — both halves must show."""
+    e.reset()
+    e.seed({"svc.py": VULN_SRC})
+    rc, out, err = e.run("crew", "--amplify", "3",
+                         "add a module-level docstring to svc.py", "--max", "1")
+    check(rc == 0, "amplify: the run completes", err[-200:] if rc else "")
+    # "director drew 3 plans · 3 agreed on N subtasks"
+    m = re.search(r"director drew (\d+) plans", out)
+    check(m is not None and int(m.group(1)) == 3,
+          "amplify: the director really drew 3 plans, not 1",
+          (m.group(0) if m else out.strip()[:90]))
+    check(re.search(r"3-reviewer panel", out) is not None,
+          "amplify: …and the audit is a 3-reviewer panel",
+          next((l for l in out.splitlines() if "audit" in l), "")[:90])
+
+    # --amplify 1 must NOT pay for a panel: the brain is opt-in per run.
+    e.reset()
+    rc, out, _ = e.run("crew", "add a comment to svc.py", "--max", "1")
+    check("director drew" not in out,
+          "amplify: a plain run draws one plan and says nothing about panels")
+
+
+def probe_swarm(e):
+    """--swarm raises the coder cap; the run must respect it, not ignore it."""
+    e.reset()
+    e.seed({"svc.py": VULN_SRC})
+    rc, out, err = e.run(
+        "crew", "--swarm", "6",
+        "add a docstring to lookup(), a docstring to backup(), and a README.md",
+        "--max", "6")
+    check(rc == 0, "swarm: the run completes", err[-200:] if rc else "")
+    coders = {int(m) for m in re.findall(r"coder #(\d+)", out)}
+    check(bool(coders), "swarm: coders were planned", f"saw {sorted(coders)}")
+    # The cap is the contract: --swarm 6 --max 6 must never exceed 6.
+    check(not coders or max(coders) <= 6,
+          "swarm: the coder count stays within the cap", f"saw {sorted(coders)}")
+
+
+def probe_pack(e):
+    """A saved pack must actually shape the run it is applied to."""
+    e.reset()
+    e.seed({"svc.py": VULN_SRC})
+    # A pack that pins the coder model to something distinctive, so the plan
+    # line proves the pack was read rather than merely accepted.
+    pin = e.model or "gpt-oss:20b-cloud"
+    rc, out, err = e.run("crew", "pack", "save", "probepack",
+                         "--focus", "keep the change tiny", "--coder-model", pin)
+    check(rc == 0, "pack: save succeeds", (out + err).strip()[:90])
+    rc, out, _ = e.run("crew", "pack", "list")
+    check("probepack" in out, "pack: it appears in the list", out.strip()[:80])
+    rc, out, _ = e.run("crew", "pack", "show", "probepack")
+    check(pin in out and "keep the change tiny" in out,
+          "pack: show reports what was saved", out.strip()[:120])
+
+    rc, out, err = e.run("crew", "--pack", "probepack",
+                         "add a comment to svc.py", "--max", "1")
+    check(rc == 0, "pack: a run using the pack completes", err[-200:] if rc else "")
+    check(pin in out, "pack: the pack's model reaches the plan",
+          next((l for l in out.splitlines() if "coder #1" in l), "")[:100])
+
+    check(e.run("crew", "pack", "rm", "probepack")[0] == 0, "pack: rm succeeds")
+    check("probepack" not in e.run("crew", "pack", "list")[1], "pack: …and it is gone")
+
+
 PROBES = {
     "route": probe_route,
+    "amplify": probe_amplify,
+    "swarm": probe_swarm,
+    "pack": probe_pack,
     "security": probe_security,
     "learn": probe_learn,
     "dedupe": probe_dedupe,

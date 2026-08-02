@@ -1637,6 +1637,35 @@ static void testFlagsBeforeCommand() {
         const CliRun r = runCli({QString::fromLatin1(f), "backends"});
         check(r.code == 0, QByteArray(f) + " before the command works too");
     }
+
+    // A command WITH a subcommand is the hard case, and the one the first version
+    // of this fix broke. Handlers read their subcommand positionally, so a leading
+    // flag left in place was read as the subcommand: `--no-color ws list` reported
+    // an unknown subcommand "--no-color". The argument list is normalised now, and
+    // both spellings have to agree exactly.
+    const QVector<QStringList> subcommandForms{
+        {QStringLiteral("ws"), QStringLiteral("list")},
+        {QStringLiteral("memory"), QStringLiteral("list")},
+        {QStringLiteral("index"), QStringLiteral("status")},
+        {QStringLiteral("skills"), QStringLiteral("list")},
+        {QStringLiteral("models"), QStringLiteral("presets")},
+        {QStringLiteral("config"), QStringLiteral("get"), QStringLiteral("ui.color")},
+    };
+    for (const QStringList& form : subcommandForms) {
+        for (const char* f : {"--no-color", "-q", "--verbose"}) {
+            const QString flag = QString::fromLatin1(f);
+            const CliRun pre = runCli(QStringList{flag} + form);
+            const CliRun post = runCli(form + QStringList{flag});
+            const QByteArray label = (form.join(' ') + " with " + flag).toUtf8();
+            check(pre.code == post.code, label + ": same exit code either side");
+            check(pre.out == post.out, label + ": same output either side");
+        }
+    }
+
+    // …but a pass-through command's argv is not ours to reorder.
+    const CliRun git = runCli({"git", "log", "--oneline", "-3"});
+    check(git.code == 0 && git.out.count('\n') <= 3,
+          "git's own argv survives in the order it was given");
 }
 
 // -q/--quiet and --verbose. The contract that matters: quiet drops PROGRESS only.
@@ -1671,14 +1700,55 @@ static void testVerbosity() {
 // in a few places: `doctor --json` printed the human table and dropped the flag,
 // which a script would then parse as though it had worked.
 static void testJsonCoverage() {
-    for (const char* cmd : {"backends", "models"}) {
-        const CliRun r = runCli({QString::fromLatin1(cmd), "--json"});
-        check(r.code == 0, QByteArray(cmd) + " --json succeeds");
+    // Run every command the allowlist claims, for real, and parse what comes back.
+    // The hand-written first version of that list was wrong in both directions —
+    // it claimed crew and ws emitted JSON when they had no --json path at all, and
+    // omitted board, which did. Asserting it by execution is the only version of
+    // this check that cannot quietly become false.
+    //
+    // eval and diff need a model or a git repo, so they are exercised elsewhere;
+    // everything else runs standalone. Each is given its list form, which is what
+    // a bare `<cmd> --json` reaches.
+    const QVector<QPair<QString, QStringList>> listForms{
+        {QStringLiteral("backends"), {QStringLiteral("backends")}},
+        {QStringLiteral("board"), {QStringLiteral("board")}},
+        {QStringLiteral("memory"), {QStringLiteral("memory"), QStringLiteral("list")}},
+        {QStringLiteral("models"), {QStringLiteral("models")}},
+        {QStringLiteral("scan"), {QStringLiteral("scan")}},
+        {QStringLiteral("ws"), {QStringLiteral("ws"), QStringLiteral("list")}},
+    };
+    for (const auto& form : listForms) {
+        QStringList argv = form.second;
+        argv << QStringLiteral("--json");
+        const CliRun r = runCli(argv);
+        check(r.code == 0 || r.code == 1,
+              form.first.toUtf8() + " --json runs (0, or 1 for a finding)");
         QJsonParseError e{};
         QJsonDocument::fromJson(r.out.toUtf8(), &e);
         check(e.error == QJsonParseError::NoError,
-              QByteArray(cmd) + " --json emits parseable JSON");
+              form.first.toUtf8() + " --json emits parseable JSON, not prose");
     }
+
+    // Empty state must still be JSON. These are run against a fresh HOME, where
+    // there are no workspaces and no notes — the case that used to print a
+    // friendly sentence straight into somebody's parser.
+    QTemporaryDir emptyHome;
+    if (emptyHome.isValid()) {
+        for (const char* cmd : {"ws", "memory"}) {
+            const CliRun r =
+                runCli({QString::fromLatin1(cmd), "list", "--json"}, {}, emptyHome.path());
+            check(r.out.trimmed() == QStringLiteral("[]"),
+                  QByteArray(cmd) + " list --json is [] when empty, not a sentence");
+        }
+    }
+
+    // `board` honoured --json long before the allowlist existed. Leaving it out
+    // turned a working flag into an error, which is the more expensive direction
+    // to be wrong in — so it gets its own assertion rather than living only in the
+    // loop above.
+    const CliRun board = runCli({"board", "--json"});
+    check(board.code == 0 && !board.err.contains(QStringLiteral("not supported")),
+          "board --json is not rejected — it has always emitted JSON");
 
     // A command with no JSON form must say so rather than pretend.
     const CliRun unsupported = runCli({"doctor", "--json"});
@@ -1689,6 +1759,33 @@ static void testJsonCoverage() {
           "…and lists the commands that do emit JSON");
     check(unsupported.out.isEmpty(),
           "…and prints nothing to stdout, so a parser sees no half-answer");
+}
+
+// Several commands dispatched their known subcommands and let everything else
+// fall through to a default: `index buidl` reported the index status, `agents foo`
+// listed every agent. Both look like they worked, which is the silent no-op this
+// CLI rejects at the top level and had not been rejecting one level down.
+static void testUnknownSubcommands() {
+    const QVector<QPair<QStringList, QString>> cases{
+        {{QStringLiteral("index"), QStringLiteral("buidl")}, QStringLiteral("index")},
+        {{QStringLiteral("agents"), QStringLiteral("bogus")}, QStringLiteral("agents")},
+    };
+    for (const auto& c : cases) {
+        const CliRun r = runCli(c.first);
+        check(r.code == 2, c.second.toUtf8() + ": an unknown subcommand exits 2");
+        check(r.err.contains(QStringLiteral("unknown subcommand")),
+              c.second.toUtf8() + ": …and says so");
+        check(r.err.contains(QStringLiteral("usage:")),
+              c.second.toUtf8() + ": …and shows what it does take");
+        check(r.out.isEmpty(),
+              c.second.toUtf8() + ": …and prints nothing that looks like a result");
+    }
+
+    // The real subcommands must be untouched by that guard.
+    check(runCli({"agents"}).code == 0, "a bare `agents` still lists them");
+    check(runCli({"agents", "list"}).code == 0, "…and so does `agents list`");
+    const CliRun idx = runCli({"index", "status"});
+    check(idx.code == 0 || idx.code == 1, "`index status` still reports status");
 }
 
 // State used to live in ~/.ollamadev unconditionally. It now follows the XDG base
@@ -1889,6 +1986,7 @@ int main(int argc, char** argv) {
     s << "argorder\n";   s.flush(); testFlagsBeforeCommand();
     s << "verbosity\n";  s.flush(); testVerbosity();
     s << "json\n";       s.flush(); testJsonCoverage();
+    s << "subcmds\n";    s.flush(); testUnknownSubcommands();
 
     s << "\n" << passed << " passed, " << failed << " failed\n";
     s.flush();

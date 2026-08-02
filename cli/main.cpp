@@ -163,6 +163,33 @@ QStringList positionals(const QStringList& a) {
     return out;
 }
 
+// The same tokens, with the positionals first (in their original order) and the
+// flags moved to the end (also in order, each still adjacent to its value).
+//
+// Subcommand handlers index their arguments positionally — `sub = args.value(0)`,
+// `crew steer` reads value(1) and mid(2) — while flags are looked up by name.
+// Both stay correct under this, and it is what lets a global flag sit before the
+// command: `ollamadev --no-color ws list` hands cmdWorkspace ["list",
+// "--no-color"] rather than ["--no-color", "list"], where the subcommand read
+// would have picked up the flag and reported an unknown subcommand.
+//
+// NOT applied to the pass-through commands: `git log --oneline` is git's argv and
+// its order is git's business.
+QStringList positionalsFirst(const QStringList& a) {
+    const QStringList& takesValue = flagsTakingValue();
+    QStringList pos, flags;
+    for (int i = 0; i < a.size(); ++i) {
+        const QString& t = a.at(i);
+        if (t.startsWith('-') && t != QLatin1String("-")) {
+            flags << t;
+            if (takesValue.contains(t) && i + 1 < a.size()) flags << a.at(++i);
+            continue;
+        }
+        pos << t;
+    }
+    return pos + flags;
+}
+
 // Where the command word actually sits in argv. Needed because a flag may come
 // before it: `ollamadev --json models` is how everyone writes this, and dispatch
 // used to read args.first() — so it saw "--json", matched no command, and fell
@@ -406,9 +433,16 @@ const QStringList& knownFlags() {
 // command that has no machine-readable form used to print the human table and
 // drop the flag silently — a script would parse that output and quietly get
 // nonsense. Naming the set lets the arg checker say so instead.
+// Every entry is checked by testJsonCoverage(), which runs the command for real
+// and parses what comes back. The first version of this list was hand-written
+// from a grep, and it was wrong in both directions: it claimed `crew` and `ws`
+// emitted JSON when neither had a --json path anywhere, and it left out `board`,
+// which did — so `board --json` started failing on a flag it had always
+// honoured. A list that asserts what other code does has to be executable, or it
+// is just a second place for the truth to drift to.
 const QStringList& jsonCommands() {
-    static const QStringList v{"backends", "crew",  "diff",      "eval", "memory",
-                               "models",   "scan",  "workspace", "ws"};
+    static const QStringList v{"backends", "board", "diff",      "eval",
+                               "memory",   "models", "scan",     "workspace", "ws"};
     return v;
 }
 
@@ -1448,6 +1482,21 @@ int cmdWorkspace(const QStringList& args) {
 
     if (sub.isEmpty() || sub == "list" || sub == "ls") {
         const auto list = Workspaces::all();
+        // JSON before the empty check: an empty list is `[]`, not prose. A caller
+        // that pipes this into a parser must not have the shape change under it
+        // just because there is nothing to report yet.
+        if (hasFlag(args, "--json")) {
+            const QString activeId = Workspaces::activeId();
+            QJsonArray arr;
+            for (const Workspace& w : list)
+                arr.append(QJsonObject{{"id", w.id},
+                                       {"name", w.name},
+                                       {"path", w.path},
+                                       {"active", w.id == activeId}});
+            out() << QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)) << "\n";
+            out().flush();
+            return 0;
+        }
         if (list.isEmpty()) {
             out() << "no workspaces yet — bookmark this folder:\n  ollamadev ws add\n";
             out().flush();
@@ -1614,6 +1663,16 @@ int cmdAgents(const QStringList& args) {
         out() << "\n" << d.prompt << "\n";
         out().flush();
         return 0;
+    }
+
+    // `agents` and `agents list` list them; `agents show <name>` is handled above.
+    // Anything else is a typo — most likely `agents <name>` meant as a shorthand
+    // for show — and listing everything in reply would look like it had worked.
+    if (!sub.isEmpty() && sub != QLatin1String("list")) {
+        err() << "unknown subcommand: " << sub << "\n"
+              << "usage: ollamadev agents [list | show <name>]\n";
+        err().flush();
+        return 2;
     }
 
     const QVector<AgentDef> all = AgentDefs::all();
@@ -1901,6 +1960,17 @@ int cmdIndex(const QStringList& args) {
         return 0;
     }
 
+    // Only `status` and a bare `index` land here. Anything else was a typo, and
+    // reporting the index status instead of saying so is the silent no-op this
+    // CLI refuses everywhere else — `index buidl` used to answer as though the
+    // user had asked a question they had not.
+    if (!sub.isEmpty() && sub != QLatin1String("status")) {
+        err() << "unknown subcommand: " << sub << "\n"
+              << "usage: ollamadev index [build | status | clear]\n";
+        err().flush();
+        return 2;
+    }
+
     const IndexStatus s = CodeIndex::status();
     if (!s.exists) {
         out() << "no index yet — build it with: ollamadev index build\n";
@@ -2106,6 +2176,19 @@ int cmdMemory(const QStringList& args) {
 
     if (sub.isEmpty() || sub == "list") {
         const auto notes = Memory::all();
+        // Before the empty check, so an empty memory is `[]` rather than prose —
+        // the shape a parser sees must not depend on how much is in there.
+        if (hasFlag(args, "--json")) {
+            QJsonArray arr;
+            for (const MemoryNote& m : notes)
+                arr.append(QJsonObject{{"slug", m.slug},
+                                       {"title", m.title},
+                                       {"tags", QJsonArray::fromStringList(m.tags)},
+                                       {"links", QJsonArray::fromStringList(m.links)}});
+            out() << QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)) << "\n";
+            out().flush();
+            return 0;
+        }
         if (notes.isEmpty()) {
             out() << "memory is empty — write one with: "
                      "ollamadev memory new \"<title>\" \"<body>\"\n";
@@ -3657,6 +3740,9 @@ int main(int argc, char** argv) {
     const QString cmd = cmdAt >= 0 ? args.at(cmdAt) : QString();
     QStringList rest = args;
     if (cmdAt >= 0) rest.removeAt(cmdAt);
+    // Normalised so a leading global flag cannot be mistaken for the subcommand.
+    // The pass-through commands keep their argv exactly as typed.
+    if (!forwardsUnknownArgs(cmd)) rest = positionalsFirst(rest);
 
     // Must be early and must not fall through anything that prints: on the stdio
     // path `lsp` owns stdout the moment it starts.

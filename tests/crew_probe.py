@@ -24,21 +24,28 @@ route, board. Use it — this is EXPENSIVE. A full pass runs six crews, each
 fanning out parallel coders, and will keep a laptop's fans up for several
 minutes. `--only route` costs a second or two; `--only learn` took 143s here.
 
-Where the work happens is yours to choose, and both are first-class:
+Where the work happens is yours to choose:
 
-  (nothing)                     your configured default — local Ollama unless
-                                you have changed it
-  --model qwen3.5:2b            a small LOCAL model: cheapest in money, and the
-                                one that keeps everything on your machine
-  --model gpt-oss:20b-cloud     Ollama's cloud tags: inference runs off-box, but
-                                sandboxes, git and the coder processes are still
-                                local, so this does NOT make the run free here
-  --backend claude              a different provider entirely, for every role
+  (nothing)                     config's ollama.defaultModel, for every role
+  --model qwen3.5:2b            a small LOCAL model: keeps everything on this box
+  --model gpt-oss:20b-cloud     a cloud tag: inference runs off-box, but sandbox
+                                copying, per-coder git and the coder processes
+                                are still local, so it is NOT free here
+  --backend claude              a different provider, for every role
+  --require-cloud               abort if Ollama loads anything without "cloud"
+                                in its tag
 
---backend sets the session backend, which every role falls back to, so it is
-what stops a director or auditor quietly landing somewhere else. Note that
-`route` ignores both: choosing the model IS its job, and it will reach for a
-local one regardless.
+--model and --backend are expanded here into the PER-ROLE flags
+(--coder-model, --director-model, --auditor-model, --researcher-model, and the
+matching --*-backend). They are not passed as -m/--backend, because the crew
+option builder does not read those: they sit in the global Options block and
+nothing on this path parses them, so `crew "task" -m X` ignores X entirely and
+every role falls back to config. A run that looks pinned to a cloud model may
+only be landing there because the configured default happens to be one.
+
+`route` ignores all of it by design — choosing the model IS its job, and it will
+reach for a local one whatever you pass. That is why --require-cloud watches
+what Ollama actually loads instead of trusting any of the above.
 
 Exercised so far: route (3 checks), security (7), learn (5). The dedupe,
 dedupe-negative and board sections are written but have not yet been run
@@ -53,6 +60,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 VULN_SRC = """import os, sqlite3
@@ -65,11 +73,67 @@ def backup(path):
 """
 
 RESULTS = []
+ABORT = []  # non-empty once the local-model guard has tripped
 
 
 def check(ok, label, extra=""):
     RESULTS.append((bool(ok), label, extra))
     print(("  ok    " if ok else "  FAIL  ") + label + (f"\n          {extra}" if extra else ""))
+
+
+class LocalModelGuard:
+    """Abort the moment Ollama loads a model that is not a cloud tag.
+
+    --require-cloud exists because reasoning about where inference will happen
+    turned out to be unreliable: the obvious flag for it (-m) is not read by the
+    crew path at all, so runs that looked pinned to a cloud model were only
+    landing there because the user's configured default happened to be one.
+
+    This does not reason. It polls `ollama ps` and looks at what is actually
+    resident. A tag without "cloud" in it is running on this machine's GPU, and
+    the run is stopped rather than allowed to keep heating it.
+    """
+
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self.stop = threading.Event()
+        self.seen = set()
+        self.thread = None
+
+    @staticmethod
+    def loaded():
+        try:
+            p = subprocess.run(["ollama", "ps"], capture_output=True, timeout=10)
+        except Exception:
+            return []
+        names = []
+        for line in p.stdout.decode("utf-8", "replace").splitlines()[1:]:
+            parts = line.split()
+            if parts:
+                names.append(parts[0])
+        return names
+
+    def _watch(self):
+        while not self.stop.wait(2.0):
+            for name in self.loaded():
+                self.seen.add(name)
+                if "cloud" not in name.lower() and not ABORT:
+                    ABORT.append(name)
+                    print(f"\n  !! ABORT: ollama loaded a LOCAL model: {name}\n"
+                          f"     --require-cloud is on, so the run stops here rather than\n"
+                          f"     keep a {name} resident on this machine's GPU.\n")
+                    return
+
+    def __enter__(self):
+        if self.enabled:
+            self.thread = threading.Thread(target=self._watch, daemon=True)
+            self.thread.start()
+        return self
+
+    def __exit__(self, *a):
+        self.stop.set()
+        if self.thread:
+            self.thread.join(timeout=5)
 
 
 class Env:
@@ -111,13 +175,19 @@ class Env:
         # onto `board` or `memory list` would be accepted and silently ignored,
         # which is the sort of thing that later reads as evidence they applied.
         if args and args[0] in ("crew", "route"):
+            # PER-ROLE flags, not -m. The crew option builder never reads -m or
+            # --backend — they are listed in the global Options block and parsed
+            # nowhere on this path — so `crew "task" -m X` silently ignores X and
+            # every role falls back to config's ollama.defaultModel. Passing -m
+            # here looked like pinning the model and pinned nothing.
             if self.model:
-                argv += ["-m", self.model]
-            # One --backend covers every role: the crew falls back to the session
-            # backend for any role that does not name its own, so this is what
-            # stops a director or auditor quietly landing on a different one.
+                for flag in ("--coder-model", "--director-model",
+                             "--auditor-model", "--researcher-model"):
+                    argv += [flag, self.model]
             if self.backend:
-                argv += ["--backend", self.backend]
+                for flag in ("--coder-backend", "--director-backend",
+                             "--auditor-backend", "--researcher-backend"):
+                    argv += [flag, self.backend]
         try:
             p = subprocess.run(argv, cwd=self.work, env=env, timeout=timeout,
                                stdin=subprocess.DEVNULL, capture_output=True)
@@ -298,6 +368,10 @@ def main():
                          "Omit to use your configured default, which is local Ollama "
                          "unless you have changed it.")
     ap.add_argument("--only", default="", help="comma-separated: " + ", ".join(PROBES))
+    ap.add_argument("--require-cloud", action="store_true",
+                    help="abort the run if Ollama loads any model without 'cloud' in its "
+                         "tag. Checks what is actually resident rather than trusting the "
+                         "flags, because -m does not pin the crew's models.")
     args = ap.parse_args()
 
     wanted = [s.strip() for s in args.only.split(",") if s.strip()] or list(PROBES)
@@ -311,14 +385,21 @@ def main():
           f"\n           model   {args.model or '(configured default)'}"
           f"\n           work    {e.work}\n")
     try:
-        for name in wanted:
-            print(f"[{name}]")
-            t = time.time()
-            try:
-                PROBES[name](e)
-            except Exception as exc:  # a probe must not take the run down with it
-                check(False, f"{name}: probe raised", repr(exc))
-            print(f"          ({time.time() - t:.0f}s)\n")
+        with LocalModelGuard(args.require_cloud) as guard:
+            for name in wanted:
+                if ABORT:
+                    print(f"[{name}] skipped — local model {ABORT[0]} was loaded\n")
+                    continue
+                print(f"[{name}]")
+                t = time.time()
+                try:
+                    PROBES[name](e)
+                except Exception as exc:  # a probe must not take the run down with it
+                    check(False, f"{name}: probe raised", repr(exc))
+                print(f"          ({time.time() - t:.0f}s)\n")
+            if args.require_cloud:
+                print(f"models Ollama loaded during this run: "
+                      f"{', '.join(sorted(guard.seen)) or '(none seen)'}\n")
     finally:
         e.cleanup()
 

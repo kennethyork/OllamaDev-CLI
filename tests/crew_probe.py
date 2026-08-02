@@ -47,8 +47,9 @@ reach for a local one whatever you pass. That, and the fact that the "obviously
 correct" flag turned out to do nothing for months, is why --require-cloud
 watches what Ollama actually loads rather than trusting any of the above.
 
-Every section has now been run end to end and passes: route (3 checks),
-security (7), learn (5), dedupe (4), dedupe-negative (2), board (6).
+Every section has been run end to end and passes: route (3 checks),
+amplify (4), swarm (3), pack (8), security (7), learn (5), dedupe (4),
+dedupe-negative (2), board (6) — 42 in all.
 """
 import argparse
 import glob
@@ -114,14 +115,40 @@ class LocalModelGuard:
                 names.append(parts[0])
         return names
 
+    @staticmethod
+    def clients():
+        """Who currently holds a connection to Ollama.
+
+        The guard watches the whole machine, so a local model may belong to
+        something else entirely. Without this it can only say a local model
+        appeared, not whose it was — which is the difference between a real
+        finding and a false alarm from another process on the same box.
+        """
+        try:
+            p = subprocess.run(["ss", "-tnp"], capture_output=True, timeout=10)
+        except Exception:
+            return []
+        who = set()
+        for line in p.stdout.decode("utf-8", "replace").splitlines():
+            # Ollama's port only. Matching the whole table names every process
+            # with any socket open — firefox and the updater included — which
+            # would point the finger at whatever happened to be online.
+            if ":11434" not in line:
+                continue
+            who.update(re.findall(r'"([^"]+)",pid=(\d+)', line))
+        return sorted(who)
+
     def _watch(self):
         while not self.stop.wait(2.0):
             for name in self.loaded():
                 self.seen.add(name)
                 if "cloud" not in name.lower() and not ABORT:
+                    who = self.clients()
                     ABORT.append(name)
-                    print(f"\n  !! ABORT: ollama loaded a LOCAL model: {name}\n"
-                          f"     --require-cloud is on, so the run stops here rather than\n"
+                    print(f"\n  !! ABORT: ollama loaded a LOCAL model: {name}")
+                    print(f"     holding a connection to ollama: "
+                          f"{', '.join(f'{n}(pid {p})' for n, p in who) or 'nobody right now'}")
+                    print(f"     --require-cloud is on, so the run stops here rather than\n"
                           f"     keep a {name} resident on this machine's GPU.\n")
                     return
 
@@ -147,6 +174,21 @@ class Env:
         self.home = tempfile.mkdtemp(prefix="odv-crew-home-")
         self.state = os.path.join(self.home, "state")
         self.work = tempfile.mkdtemp(prefix="odv-crew-work-")
+        # Pin the model in the isolated config too, not only on the command line.
+        # The probe runs with an empty OLLAMADEV_HOME, so ollama.defaultModel is
+        # unset and ANY resolution path that falls through — a role nobody named,
+        # a helper that reads config directly — lands on Backends::defaultModel(),
+        # which is whatever Ollama offers first and is typically a LOCAL tag.
+        # Flags cover the roles; this closes everything behind them.
+        if model or backend:
+            os.makedirs(self.state, exist_ok=True)
+            cfg = {}
+            if model:
+                cfg["ollama"] = {"defaultModel": model}
+            if backend:
+                cfg["model"] = {"backend": backend}
+            with open(os.path.join(self.state, "config.json"), "w") as f:
+                json.dump(cfg, f)
         self._git("init", "-q", ".")
         self._git("config", "user.email", "probe@example.invalid")
         self._git("config", "user.name", "probe")

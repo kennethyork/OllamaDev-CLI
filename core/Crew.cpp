@@ -836,14 +836,37 @@ Crew::Result Crew::run(const CrewOptions& opts, const CrewEvents& ev, const Canc
             const QString jb = backendFor(opts.directorBackend);
             const QString jm = routedForTier(jb, opts.directorModel, QStringLiteral("hard"));
             if (auto backend = Backends::get(jb)) {
+                // The judge is asked to spot the same work done in DIFFERENT
+                // files, so it has to see what the work actually was. It used to
+                // get only the coder number, the subtask title and the file
+                // names — precisely the three fields that cannot show it. Two
+                // coders writing the same overview into overview-a.md and
+                // overview-b.md read as plainly different work by title and
+                // filename, so nothing was ever grouped and the brain could not
+                // fire. The diff is what carries the answer, which is what the
+                // debate judge next door is given.
+                //
+                // Budgeted per coder: a duplicate is obvious from the opening of
+                // a diff, and a large fan-out must not blow the context window.
+                const int perCoder = qBound(400, 6000 / qMax(1, live.size()), 2000);
                 QString listing;
-                for (int i : live)
+                for (int i : live) {
                     listing += QStringLiteral("coder #%1: %2 — files: %3\n")
                                    .arg(subs[i].n)
                                    .arg(subs[i].title, results[i].files.join(", "));
+                    const QString d = results[i].diff.trimmed();
+                    if (!d.isEmpty())
+                        listing += QStringLiteral("--- diff (coder #%1) ---\n%2\n\n")
+                                       .arg(subs[i].n)
+                                       .arg(d.left(perCoder));
+                }
                 const QString sys =
-                    "Several coders worked in parallel. Identify groups that did the SAME work "
-                    "(duplicates), even in different files. Reply with JSON only: "
+                    "Several coders worked in parallel. Each block below is one coder's subtask "
+                    "and the diff it produced. Identify groups that did the SAME work "
+                    "(duplicates) — judge by what the diffs CONTAIN, not by file names, because "
+                    "duplicated work usually lands in differently named files. Two changes are "
+                    "duplicates when applying both would be redundant: they add the same "
+                    "behaviour, the same documentation or the same tests. Reply with JSON only: "
                     "{\"duplicates\":[{\"keep\":<coder#>,\"drop\":[<coder#>,...]}]} — keep the "
                     "most complete member of each group. Empty list if none duplicate.";
                 const QJsonObject v = backend->chatJson(

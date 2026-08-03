@@ -47,16 +47,35 @@ times by hand:
 for i in 1 2 3 4 5; do ollamadev eval --only hard-three-step-pipeline; done
 ```
 
-## Measured so far
+## Measured
 
-Full suite, 36 tasks (26 built-in + these 10), one run each:
+Each hard task run three times per backend (`tests/eval_repeat.py`), after the
+`hard-follow-project-pattern` check was corrected:
 
-| backend | score | hard tasks |
+| task | `gpt-oss:20b-cloud` | `claude` |
 | --- | --- | --- |
-| `ollama` / `gpt-oss:20b-cloud` | 35/36 · 97.2% | 9/10 |
-| `claude` | 34/36 · 94.4% | 8/10 |
+| `hard-three-step-pipeline` | **1/3** | **1/3** |
+| `hard-preserve-unknown-keys` | **2/3** | 3/3 |
+| the other eight | 3/3 | 3/3 |
+| **total** | **27/30 · 90.0%** | **28/30 · 93.3%** |
 
-A one-task spread at n=36 is inside the noise, especially with a known-flaky
-task in the set — this does **not** establish that either is better. What it
-does establish is that the agent loop and both backends work end to end, and
-that the suite can now distinguish something, which the built-in one could not.
+Read that honestly: **nine of ten tasks are ceiling for both backends.** Only
+`hard-three-step-pipeline` is at the boundary, and it beats both about two runs
+in three. The suite discriminates better than the built-in 26 — which separated
+nothing — but it is still close to saturated, and a one-task total gap is not a
+ranking.
+
+If you want it to rank things, the next tasks need to be harder again: longer
+horizons, more files, and prompts where the requirement has to be inferred from
+the codebase rather than read off the sentence.
+
+### A caution paid for once
+
+`hard-follow-project-pattern` first measured 1/3 and 0/3. Almost all of that was
+the check, not the agents: it demanded the literal `APP_TIMEOUT` appear in
+`net.py`, while putting it in `settings.py` beside the other settings is at
+least as good an answer. With the check fixed, both backends score 3/3.
+
+A flaky task is evidence of *something*, and the first thing to rule out is your
+own check. Run `tests/validate_evals.py`, and reference-solve any task that
+starts failing before concluding anything about the agent.

@@ -22,7 +22,7 @@
     },
     "check": {
       "type": "command",
-      "cmd": "{python} -c \"import os,subprocess,sys; src=open('net.py').read(); assert 'environ' in src, 'not using the environment'; assert 'APP_TIMEOUT' in src, 'did not follow the APP_ naming pattern'; e=dict(os.environ,APP_TIMEOUT='99'); r=subprocess.run([sys.executable,'-c','import net;print(net.timeout())'],capture_output=True,text=True,env=e); assert r.stdout.strip()=='99', r.stdout+r.stderr; d=subprocess.run([sys.executable,'-c','import net;print(net.timeout())'],capture_output=True,text=True); assert d.stdout.strip()=='30', d.stdout+d.stderr; print('OK')\"",
+      "cmd": "{python} -c \"import os,glob,subprocess,sys; src=''.join(open(f).read() for f in glob.glob('*.py')); assert 'APP_TIMEOUT' in src, 'did not follow the APP_ naming pattern'; e=dict(os.environ,APP_TIMEOUT='99'); r=subprocess.run([sys.executable,'-c','import net;print(net.timeout())'],capture_output=True,text=True,env=e); assert r.stdout.strip()=='99', r.stdout+r.stderr; d=subprocess.run([sys.executable,'-c','import net;print(net.timeout())'],capture_output=True,text=True); assert d.stdout.strip()=='30', d.stdout+d.stderr; print('OK')\"",
       "expect": "OK"
     }
   },

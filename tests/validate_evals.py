@@ -116,6 +116,75 @@ REFERENCE = {
             "    return out\n"
         ),
     },
+    "harder-tests-are-the-spec": {
+        "calc.py": (
+            "def add(a, b):\n    return a + b\n\n\n"
+            "def divide(a, b):\n"
+            "    if b == 0:\n        return None\n    return a / b\n\n\n"
+            "def mean(xs):\n"
+            "    if not xs:\n        return 0\n    return round(sum(xs) / len(xs), 2)\n\n\n"
+            "_OPS = {'add': add, 'divide': divide}\n\n\n"
+            "def apply(name, a, b):\n    return _OPS[name](a, b)\n"
+        ),
+    },
+    "harder-deep-structure-no-recursion": {
+        "tree.py": (
+            "def depth(node):\n"
+            "    best = 0\n"
+            "    stack = [(node, 0)]\n"
+            "    while stack:\n"
+            "        cur, d = stack.pop()\n"
+            "        if not isinstance(cur, dict) or not cur:\n"
+            "            best = max(best, d)\n            continue\n"
+            "        for v in cur.values():\n            stack.append((v, d + 1))\n"
+            "    return best\n"
+        ),
+    },
+    "harder-merge-touching-intervals": {
+        "intervals.py": (
+            "def merge_intervals(intervals):\n"
+            "    if not intervals:\n        return []\n"
+            "    items = sorted(tuple(i) for i in intervals)\n"
+            "    out = [items[0]]\n"
+            "    for s, e in items[1:]:\n"
+            "        if s <= out[-1][1]:\n"
+            "            out[-1] = (out[-1][0], max(out[-1][1], e))\n"
+            "        else:\n            out.append((s, e))\n"
+            "    return out\n"
+        ),
+    },
+    "harder-registry-across-files": {
+        "handlers/csvh.py": (
+            "import csv\nimport io\n\nfrom handlers import register\n\n\n"
+            "@register\nclass CsvHandler:\n"
+            "    name = 'csv'\n\n"
+            "    @staticmethod\n    def parse(raw):\n"
+            "        return [row for row in csv.reader(io.StringIO(raw))]\n"
+        ),
+        "dispatch.py": (
+            "import handlers.csvh  # noqa: F401\n"
+            "import handlers.jsonh  # noqa: F401\n"
+            "import handlers.text  # noqa: F401\n"
+            "from handlers import REGISTRY\n\n\n"
+            "def dispatch(fmt, raw):\n    return REGISTRY[fmt].parse(raw)\n"
+        ),
+    },
+    "harder-exit-codes-and-streams": {
+        "check.py": (
+            "import os\nimport sys\n\n\n"
+            "def main(argv):\n"
+            "    if len(argv) != 1:\n"
+            "        print('usage: check.py <file>', file=sys.stderr)\n        return 2\n"
+            "    path = argv[0]\n"
+            "    if not os.path.exists(path):\n"
+            "        print('no such file: ' + path, file=sys.stderr)\n        return 1\n"
+            "    text = open(path).read()\n"
+            "    if text == '':\n"
+            "        print('empty', file=sys.stderr)\n        return 1\n"
+            "    print(len(text.splitlines()))\n    return 0\n\n\n"
+            "if __name__ == '__main__':\n    sys.exit(main(sys.argv[1:]))\n"
+        ),
+    },
 }
 
 
@@ -247,6 +316,87 @@ VARIANTS = {
             "    return True\n"
         ),
     },
+    # Classes instead of functions, and a different rounding route.
+    "harder-tests-are-the-spec": {
+        "calc.py": (
+            "from decimal import Decimal, ROUND_HALF_UP\n\n\n"
+            "def add(a, b):\n    return a + b\n\n\n"
+            "def divide(a, b):\n"
+            "    try:\n        return float(a) / float(b)\n"
+            "    except ZeroDivisionError:\n        return None\n\n\n"
+            "def mean(xs):\n"
+            "    if len(xs) == 0:\n        return 0\n"
+            "    q = Decimal(sum(xs)) / Decimal(len(xs))\n"
+            "    return float(q.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))\n\n\n"
+            "def apply(name, a, b):\n"
+            "    table = {'add': add, 'divide': divide}\n"
+            "    if name not in table:\n        raise KeyError(name)\n"
+            "    return table[name](a, b)\n"
+        ),
+    },
+    # Explicit queue and a generation counter rather than depth-per-node.
+    "harder-deep-structure-no-recursion": {
+        "tree.py": (
+            "def depth(node):\n"
+            "    level = [node]\n    seen = 0\n"
+            "    while True:\n"
+            "        nxt = []\n"
+            "        for cur in level:\n"
+            "            if isinstance(cur, dict) and cur:\n"
+            "                nxt.extend(cur.values())\n"
+            "        if not nxt:\n            return seen\n"
+            "        seen += 1\n        level = nxt\n"
+        ),
+    },
+    # Builds the result by scanning rather than mutating the tail.
+    "harder-merge-touching-intervals": {
+        "intervals.py": (
+            "def merge_intervals(intervals):\n"
+            "    items = sorted((tuple(i) for i in intervals))\n"
+            "    out = []\n"
+            "    for s, e in items:\n"
+            "        if out and s <= out[-1][1]:\n"
+            "            prev_s, prev_e = out.pop()\n"
+            "            out.append((prev_s, e if e > prev_e else prev_e))\n"
+            "        else:\n            out.append((s, e))\n"
+            "    return out\n"
+        ),
+    },
+    # Hand-rolled split instead of the csv module, registered from its own module.
+    "harder-registry-across-files": {
+        "handlers/csvh.py": (
+            "from handlers import register\n\n\n"
+            "@register\nclass CsvHandler:\n"
+            "    name = 'csv'\n\n"
+            "    @staticmethod\n    def parse(raw):\n"
+            "        return [line.split(',') for line in raw.splitlines() if line != '']\n"
+        ),
+        "dispatch.py": (
+            "from handlers import REGISTRY\n"
+            "import handlers.text  # noqa: F401\n"
+            "import handlers.jsonh  # noqa: F401\n"
+            "import handlers.csvh  # noqa: F401\n\n\n"
+            "def dispatch(fmt, raw):\n    return REGISTRY[fmt].parse(raw)\n"
+        ),
+    },
+    # argparse, and errors raised rather than returned.
+    "harder-exit-codes-and-streams": {
+        "check.py": (
+            "import pathlib\nimport sys\n\n\n"
+            "def main():\n"
+            "    args = sys.argv[1:]\n"
+            "    if len(args) != 1:\n"
+            "        sys.stderr.write('usage: check.py <file>\\n')\n        sys.exit(2)\n"
+            "    p = pathlib.Path(args[0])\n"
+            "    if not p.is_file():\n"
+            "        sys.stderr.write('cannot open %s\\n' % args[0])\n        sys.exit(1)\n"
+            "    body = p.read_text()\n"
+            "    if not body:\n"
+            "        sys.stderr.write('empty file\\n')\n        sys.exit(1)\n"
+            "    sys.stdout.write('%d\\n' % len(body.splitlines()))\n\n\n"
+            "main()\n"
+        ),
+    },
 }
 
 
@@ -263,10 +413,18 @@ def main():
     def attempt(task, solution):
         d = tempfile.mkdtemp(prefix="evalval-")
         try:
+            # A task may seed nested paths (handlers/text.py); the eval harness
+            # mkpaths the parent, so this has to as well or the validator fails
+            # on tasks that are perfectly fine.
+            def write(rel, body):
+                p = os.path.join(d, rel)
+                os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(rel) else None
+                open(p, "w").write(body)
+
             for fn, body in (task.get("files") or {}).items():
-                open(os.path.join(d, fn), "w").write(body)
+                write(fn, body)
             for fn, body in solution.items():
-                open(os.path.join(d, fn), "w").write(body)
+                write(fn, body)
             cmd = task["check"]["cmd"].replace("{python}", PY)
             r = subprocess.run(cmd, shell=True, cwd=d, capture_output=True, text=True, timeout=60)
             want = task["check"].get("expect", "")

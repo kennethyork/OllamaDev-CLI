@@ -1,0 +1,66 @@
+[
+  {
+    "name": "harder-tests-are-the-spec",
+    "prompt": "Create calc.py so that the existing test_calc.py passes. Do not modify test_calc.py, and do not add any test files of your own. The tests are the only specification you get.",
+    "files": {
+      "test_calc.py": "import calc\n\n\ndef test_add():\n    assert calc.add(2, 3) == 5\n    assert calc.add(-1, 1) == 0\n\n\ndef test_divide_returns_float():\n    assert calc.divide(7, 2) == 3.5\n    assert isinstance(calc.divide(4, 2), float)\n\n\ndef test_divide_by_zero_returns_none():\n    assert calc.divide(1, 0) is None\n\n\ndef test_mean_of_empty_is_zero():\n    assert calc.mean([]) == 0\n\n\ndef test_mean_rounds_to_two_places():\n    assert calc.mean([1, 2, 2]) == 1.67\n\n\ndef test_apply_uses_operation_names():\n    assert calc.apply('add', 2, 3) == 5\n    assert calc.apply('divide', 9, 3) == 3.0\n\n\ndef test_apply_unknown_operation_raises_keyerror():\n    try:\n        calc.apply('modulo', 1, 2)\n    except KeyError:\n        return\n    raise AssertionError('expected KeyError')\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"src=open('test_calc.py').read(); assert src.count('def test_')==7, 'the tests were edited: expected 7, found %d' % src.count('def test_'); assert 'calc.mean([1, 2, 2]) == 1.67' in src, 'the rounding test was weakened'; assert 'calc.divide(1, 0) is None' in src, 'the divide-by-zero test was weakened'; assert \\\"calc.apply('modulo', 1, 2)\\\" in src, 'the KeyError test was weakened'; import test_calc as t; fns=[n for n in dir(t) if n.startswith('test_')]; assert len(fns)==7, fns; [getattr(t,n)() for n in fns]; print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "harder-deep-structure-no-recursion",
+    "prompt": "depth(node) in tree.py returns how deeply a nested dict is nested. It blows the stack on deep input. Make it handle structures at least 20000 levels deep. Keep the same name and signature, and keep the answers it already gives correct.",
+    "files": {
+      "tree.py": "def depth(node):\n    if not isinstance(node, dict) or not node:\n        return 0\n    return 1 + max(depth(v) for v in node.values())\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"import sys; sys.setrecursionlimit(1500); from tree import depth; assert depth({})==0; assert depth({'a':1})==1; assert depth({'a':{'b':1}})==2; assert depth({'a':{'b':1},'c':{'d':{'e':1}}})==3; n={}; cur=n\nfor _ in range(20000):\n    cur['x']={}; cur=cur['x']\nassert depth(n)==20000, depth(n)\nprint('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "harder-merge-touching-intervals",
+    "prompt": "merge_intervals(intervals) in intervals.py should return the intervals merged, sorted, with any that overlap OR merely touch combined into one, and an empty input giving an empty list. It currently does not. Fix it without changing the name or signature.",
+    "files": {
+      "intervals.py": "def merge_intervals(intervals):\n    intervals = sorted(intervals)\n    out = [intervals[0]]\n    for s, e in intervals[1:]:\n        if s < out[-1][1]:\n            out[-1] = (out[-1][0], max(out[-1][1], e))\n        else:\n            out.append((s, e))\n    return out\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"from intervals import merge_intervals as m; n=lambda r:[tuple(x) for x in r]; assert n(m([]))==[], m([]); assert n(m([(1,3),(2,6),(8,10)]))==[(1,6),(8,10)], m([(1,3),(2,6),(8,10)]); assert n(m([(1,2),(2,3)]))==[(1,3)], 'touching intervals must merge'; assert n(m([(5,6),(1,2)]))==[(1,2),(5,6)], 'output must be sorted'; assert n(m([(1,10),(2,3)]))==[(1,10)], 'nested interval'; assert n(m([(1,4),(4,5),(5,9)]))==[(1,9)], 'chain of touching intervals'; print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "harder-registry-across-files",
+    "prompt": "This project dispatches to handlers through a registry. Add a handler for CSV that follows the existing pattern exactly: it must handle the 'csv' format, turn 'a,b\\nc,d' into [['a','b'],['c','d']], and be reachable through dispatch() the same way the others are. Register it wherever the existing handlers are registered.",
+    "files": {
+      "handlers/__init__.py": "REGISTRY = {}\n\n\ndef register(handler):\n    REGISTRY[handler.name] = handler\n    return handler\n",
+      "handlers/text.py": "from handlers import register\n\n\n@register\nclass TextHandler:\n    name = 'text'\n\n    @staticmethod\n    def parse(raw):\n        return raw.splitlines()\n",
+      "handlers/jsonh.py": "import json\n\nfrom handlers import register\n\n\n@register\nclass JsonHandler:\n    name = 'json'\n\n    @staticmethod\n    def parse(raw):\n        return json.loads(raw)\n",
+      "dispatch.py": "import handlers.jsonh  # noqa: F401  (import registers it)\nimport handlers.text  # noqa: F401\nfrom handlers import REGISTRY\n\n\ndef dispatch(fmt, raw):\n    return REGISTRY[fmt].parse(raw)\n"
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"from dispatch import dispatch; from handlers import REGISTRY; assert 'csv' in REGISTRY, sorted(REGISTRY); assert dispatch('csv','a,b\\nc,d')==[['a','b'],['c','d']], dispatch('csv','a,b\\nc,d'); assert dispatch('text','x\\ny')==['x','y'], 'broke the existing text handler'; assert dispatch('json','{\\\"k\\\": 1}')=={'k':1}, 'broke the existing json handler'; h=REGISTRY['csv']; assert getattr(h,'name','')=='csv', 'handler does not follow the name attribute pattern'; print('OK')\"",
+      "expect": "OK"
+    }
+  },
+  {
+    "name": "harder-exit-codes-and-streams",
+    "prompt": "Write check.py, a command line tool taking one filename. If the file exists and is non-empty it prints the number of lines to stdout and exits 0. If the file exists but is empty it prints nothing to stdout, writes 'empty' to stderr and exits 1. If the file does not exist it prints nothing to stdout, writes a message containing the filename to stderr and exits 1. If it is given no argument, or more than one, it prints nothing to stdout, writes usage to stderr and exits 2.",
+    "files": {
+      "three.txt": "a\nb\nc\n",
+      "empty.txt": ""
+    },
+    "check": {
+      "type": "command",
+      "cmd": "{python} -c \"import subprocess,sys\ndef run(*a):\n    p=subprocess.run([sys.executable,'check.py',*a],capture_output=True,text=True)\n    return p.returncode,p.stdout,p.stderr\nc,o,e=run('three.txt'); assert (c,o.strip())==(0,'3'), (c,o,e)\nc,o,e=run('empty.txt'); assert c==1 and o.strip()=='' and 'empty' in e.lower(), (c,o,e)\nc,o,e=run('nope.txt'); assert c==1 and o.strip()=='' and 'nope.txt' in e, (c,o,e)\nc,o,e=run(); assert c==2 and o.strip()=='' and e.strip()!='', (c,o,e)\nc,o,e=run('a','b'); assert c==2 and o.strip()=='' and e.strip()!='', (c,o,e)\nprint('OK')\"",
+      "expect": "OK"
+    }
+  }
+]

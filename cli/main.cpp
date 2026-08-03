@@ -1995,7 +1995,13 @@ int cmdOneShot(const QString& prompt, const QStringList& args) {
         {"system", a.buildSystemPrompt(QDir::currentPath()), {}, {}, {}, {}, {}}, user};
 
     StreamSink sink;
-    sink.onContent = [](const QString& c) {
+    // Whether anything actually reached stdout. A turn that fails before the
+    // first token streams nothing, and the agent loop reports that by RETURNING
+    // the error rather than emitting it — so without this the reply and the
+    // failure are indistinguishable from silence.
+    bool streamed = false;
+    sink.onContent = [&streamed](const QString& c) {
+        if (!c.isEmpty()) streamed = true;
         out() << c;
         out().flush();
     };
@@ -2039,6 +2045,17 @@ int cmdOneShot(const QString& prompt, const QStringList& args) {
               << model << " | grep capabilities`)\n";
         err().flush();
         return 1;
+    }
+    // Nothing streamed, yet the loop came back with text: that text is the
+    // failure, and it was being discarded. `ollamadev -m <paid-model> "…"` printed
+    // NOTHING and exited 0 while the backend had said "402 Payment Required" —
+    // a billing problem indistinguishable from a model with nothing to say, and
+    // in an eval it scored as a capability result.
+    if (!streamed) {
+        const bool isError = finalText.startsWith(QLatin1String("Error: "));
+        (isError ? err() : out()) << finalText << "\n";
+        (isError ? err() : out()).flush();
+        if (isError) return 1;
     }
     return 0;
 }

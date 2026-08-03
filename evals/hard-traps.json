@@ -31,7 +31,7 @@
     },
     "check": {
       "type": "command",
-      "cmd": "{python} -c \"import shapes; src=open('shapes.py').read(); assert 'elif' not in src, 'still an if/elif chain'; assert '{' in src, 'no dispatch dict'; assert shapes.area('square',3)==9; assert abs(shapes.area('circle',2)-12.56636)<1e-6; assert shapes.area('triangle',4)==8.0; import traceback; ok=False\ntry: shapes.area('hexagon',1)\nexcept ValueError as e: ok='hexagon' in str(e)\nassert ok, 'unknown shape no longer raises ValueError naming the shape'; print('OK')\"",
+      "cmd": "{python} -c \"import shapes; src=open('shapes.py').read(); assert 'elif' not in src, 'still an if/elif chain'; ds=[v for v in vars(shapes).values() if isinstance(v,dict) and v and all(callable(x) for x in v.values())]; assert ds, 'no dict of shape name to function'; assert set(ds[0])>={'square','circle','triangle'}, 'the dict does not cover the shapes'; assert shapes.area('square',3)==9; assert abs(shapes.area('circle',2)-12.56636)<1e-6; assert shapes.area('triangle',4)==8.0; ok=False\ntry: shapes.area('hexagon',1)\nexcept ValueError as e: ok='hexagon' in str(e)\nassert ok, 'unknown shape no longer raises ValueError naming the shape'; print('OK')\"",
       "expect": "OK"
     }
   },

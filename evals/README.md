@@ -20,17 +20,30 @@ These are picked to fail in the ways agents actually fail, not to be fiddly:
 | `hard-idempotent-append` | running twice must not duplicate; the file has no trailing newline |
 | `hard-stable-group` | order and duplicates preserved, which the obvious `set`-based answer loses |
 
-## Every task is provably solvable
+## Every task is solvable by more than one correct answer
 
 A benchmark whose checks reject a correct answer measures its own bugs. Each
-task here has a reference solution, and the check must go green against it:
+task has a reference solution and the check must go green against it — and
+because that turned out not to be enough, each also has a **variant**: a second
+correct answer written deliberately differently.
 
 ```sh
-python3 tests/validate_evals.py     # 10/10, no model involved
+python3 tests/validate_evals.py     # 10/10, both solutions each, no model
 ```
 
-Run that after editing any task. If a check disagrees with a known-good
-solution, the task is wrong, not the agent.
+One reference proves a task is passable. It cannot prove the check is grading
+behaviour rather than shape, because the reference tends to have whatever shape
+the check was written around. Both over-specified checks in this suite were
+found by a variant, not by a reference:
+
+- `hard-follow-project-pattern` demanded `APP_TIMEOUT` in `net.py`, rejecting the
+  equally good answer that puts it in `settings.py`
+- `hard-refactor-same-behaviour` demanded a literal `{`, rejecting
+  `dict(square=..., circle=...)`
+
+Both had passed their reference solution the whole time. So: run this after
+editing any task, and if a check disagrees with a known-good answer, the task is
+wrong, not the agent.
 
 ## Read the numbers with the variance in mind
 

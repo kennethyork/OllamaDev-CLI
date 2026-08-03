@@ -60,6 +60,42 @@ times by hand:
 for i in 1 2 3 4 5; do ollamadev eval --only hard-three-step-pipeline; done
 ```
 
+## The harder tier ranks them
+
+Five tasks, three reps per backend:
+
+| task | `gpt-oss:20b-cloud` | `claude` |
+| --- | --- | --- |
+| `harder-deep-structure-no-recursion` | **1/3** | **3/3** |
+| `harder-tests-are-the-spec` | 3/3 | 3/3 |
+| `harder-merge-touching-intervals` | 3/3 | 3/3 |
+| `harder-registry-across-files` | 3/3 | 3/3 |
+| `harder-exit-codes-and-streams` | 3/3 | 3/3 |
+| **total** | **13/15 · 86.7%** | **15/15 · 100%** |
+
+`harder-deep-structure-no-recursion` is the first task in this repo that has
+actually separated two backends. It requires surviving 20000 levels of nesting,
+so the obvious recursive fix cannot pass — the task can only be solved by
+recognising the constraint and converting to an iterative walk. Claude did that
+every time; the local-tag run managed it once in three, and it is worth noting
+claude spent 66s a run against 10s, which is what recognising a constraint and
+rewriting for it looks like.
+
+Combined across both tiers, 45 repeated runs each:
+
+| | `gpt-oss:20b-cloud` | `claude` |
+| --- | --- | --- |
+| hard tier | 27/30 · 90.0% | 28/30 · 93.3% |
+| harder tier | 13/15 · 86.7% | 15/15 · 100% |
+| **combined** | **40/45 · 88.9%** | **43/45 · 95.6%** |
+
+Read it with the sample size in mind. n=3 per task means 1/3 versus 3/3 is
+suggestive, not significant — it is one task, and the honest next step is more
+reps on that task rather than treating 88.9 vs 95.6 as a verdict. What it does
+establish is that the suite is no longer saturated: it contains at least one
+task that distinguishes capability rather than luck, which neither the built-in
+26 nor the first hard ten managed.
+
 ## Measured
 
 Each hard task run three times per backend (`tests/eval_repeat.py`), after the
